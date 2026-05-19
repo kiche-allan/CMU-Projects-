@@ -1,0 +1,29 @@
+Could not find platform independent libraries <prefix>
+Traceback (most recent call last):
+  File "D:\Projects\CMU Projects\sqlmap_analysis\analysis\test_bug1.py", line 52, in <module>
+    results = soup.findAll(attrs={'class': 'test'})
+  File "D:\Projects\CMU Projects\sqlmap_analysis\py3_codebase\thirdparty\beautifulsoup\beautifulsoup.py", line 867, in findAll
+    return self._findAll(name, attrs, text, limit, generator, **kwargs)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Projects\CMU Projects\sqlmap_analysis\py3_codebase\thirdparty\beautifulsoup\beautifulsoup.py", line 397, in _findAll
+    found = strainer.search(i)
+  File "D:\Projects\CMU Projects\sqlmap_analysis\py3_codebase\thirdparty\beautifulsoup\beautifulsoup.py", line 984, in search
+    found = self.searchTag(markup)
+  File "D:\Projects\CMU Projects\sqlmap_analysis\py3_codebase\thirdparty\beautifulsoup\beautifulsoup.py", line 958, in searchTag
+    if not self._matches(attrValue, matchAgainst):
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Projects\CMU Projects\sqlmap_analysis\py3_codebase\thirdparty\beautifulsoup\beautifulsoup.py", line 1014, in _matches
+    result = markup in matchAgainst
+             ^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'in <string>' requires string as left operand, not NoneType
+Python version: 3.14.5 (tags/v3.14.5:5607950, May 10 2026, 10:43:50) [MSC v.1944 64 bit (AMD64)]
+BeautifulSoup location: thirdparty.beautifulsoup.beautifulsoup
+
+Step 1: Parsing HTML...
+  OK - soup created
+
+Step 2: soup('a') - string tag search (safe path, no dict)...
+  OK - found 0 <a> tags (expected 0)
+
+Step 3: soup.findAll(attrs={'class': 'test'}) - dict attr filter (SHOULD CRASH)...
+  UNEXPECTED EXCEPTION (TypeError): 'in <string>' requires string as left operand, not NoneType

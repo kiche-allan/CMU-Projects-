@@ -1,0 +1,3 @@
+# Exclude the ocrmypdf source clones — they are their own git repos / large codebases
+py2_codebase/
+py3_codebase/

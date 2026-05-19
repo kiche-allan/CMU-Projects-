@@ -1,0 +1,9 @@
+# Exclude the mitmproxy source clones — they are their own git repos
+py2_codebase/
+py3_codebase/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env

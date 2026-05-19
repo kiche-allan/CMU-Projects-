@@ -1,0 +1,19 @@
+MITMPROXY MIGRATION BUG SCAN RESULTS
+Date: May 19 2026
+py2 commit: 4918feb72 (last before Python 3 only conversion)
+py3 commit: 782af067f (current master, mitmproxy 12.2.3)
+
+VERDICT: CLEAN — no surviving migration bugs found
+
+Patterns searched:
+- ord(c) on bytes: 3 hits — all false positives (str context, typed annotations)
+- return "" inconsistency: no hits in binary data context
+- chr() on binary data: 1 hit — safe (goes to XML DOM expecting str)
+- len = shadowing: no hits
+- bytes/str comparison: 1 false positive (property layer correctly returns str)
+- Network data misuse: no hits — clean two-layer architecture
+
+Research significance:
+Mitmproxy is evidence of a WELL-EXECUTED migration. It serves as
+the negative control in our study. Not all projects have surviving
+bugs — the bug class is real but not universal.

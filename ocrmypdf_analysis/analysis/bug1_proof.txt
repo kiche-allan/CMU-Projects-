@@ -1,0 +1,48 @@
+Could not find platform independent libraries <prefix>
+============================================================
+Bug 1: _metadata.py lines 88-89
+  bytes(v) on str raises TypeError in Python 3
+============================================================
+
+Step 1 — bytes(str_value) in Python 3:
+  value = 'Hello\x00World'
+  CRASH (TypeError): string argument without an encoding
+
+Step 2 — pdf.docinfo['/Title']:
+  value        = 'Hello\x00World'
+  Python type  = <class 'pikepdf.objects.Object'>
+  isinstance(v, str) = False
+
+Step 3 — calling repair_docinfo_nuls(pdf):
+
+  Return value: False
+  pdf.docinfo['/Title'] after call: 'Hello\x00World'
+  NUL byte still present: True
+
+RESULT: BUG CONFIRMED
+  repair_docinfo_nuls returned False — NUL was NOT removed.
+  Defect B: isinstance(v, str) is False for pikepdf.Object,
+    so the body is never entered.
+
+Step 4 — demonstrate Defect A with a plain Python str value:
+  (simulates older pikepdf that returned str from docinfo.items())
+
+  v_plain = 'NUL\x00Here'  type=<class 'str'>
+  isinstance(v_plain, str) = True
+  Calling: bytes(v_plain)...
+  CRASH (TypeError): string argument without an encoding
+
+  This TypeError is caught by except TypeError at line 91,
+  so repair_docinfo_nuls logs an error and returns False.
+
+Root cause (lines 88-89):
+  bytes(v)  — Python 3 requires an encoding; bytes(str) raises TypeError
+
+Expected fix:
+  if isinstance(v, (str, pikepdf.String)):
+      s = str(v)
+      if '\x00' in s:
+          pdf.docinfo[k] = s.replace('\x00', '')
+          modified = True
+
+Done.

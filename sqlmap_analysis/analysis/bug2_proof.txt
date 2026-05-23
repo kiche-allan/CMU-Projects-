@@ -1,0 +1,30 @@
+Could not find platform independent libraries <prefix>
+============================================================
+Bug 2: beautifulsoup.py line 579
+  self.attrs = map(convert, self.attrs)
+  Returns iterator in Python 3
+============================================================
+
+Input attrs (before Tag.__init__):  [('href', 'http://example.com'), ('class', 'link')]
+Input attrs type:                   <class 'list'>
+
+tag.attrs after Tag.__init__:       <map object at 0x00000224EF2E2600>
+tag.attrs type:                     <class 'map'>
+
+Test 1 — len(tag.attrs):
+  CRASH (TypeError): object of type 'map' has no len()
+
+Test 2 — tag.attrs[0]  (used at beautifulsoup.py:654):
+  CRASH (TypeError): 'map' object is not subscriptable
+
+Test 3 — second iteration yields nothing (iterator exhausted):
+  first  list(tag.attrs) = [('href', 'http://example.com'), ('class', 'link')]
+  second list(tag.attrs) = []  <- silently empty
+
+Root cause (line 579):
+  self.attrs = map(convert, self.attrs)   # Python 3: returns iterator
+
+Expected fix:
+  self.attrs = list(map(convert, self.attrs))
+
+Done.

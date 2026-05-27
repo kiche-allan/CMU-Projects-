@@ -1,0 +1,289 @@
+==============================================================
+DATA FLOW STEP 2 — BINARY DATA FORWARD TRACE  (py2 vs py3)
+==============================================================
+py2_codebase : v1.16.6   numpy/lib/format.py
+py3_codebase : v2.6.0dev  numpy/lib/_format_impl.py
+Date         : 2026-05-26
+
+==============================================================
+TARGET 1 — lib/format.py  ↔  lib/_format_impl.py
+  _read_array_header() : struct.unpack + header decode path
+==============================================================
+
+--------------------------------------------------------------
+1A. HEADER ENCODING TABLE (py3 only — did not exist in py2)
+--------------------------------------------------------------
+_format_impl.py:187-191
+    _header_size_info = {
+        (1, 0): ('<H', 'latin1'),   # v1.0 — 2-byte length, latin1 body
+        (2, 0): ('<I', 'latin1'),   # v2.0 — 4-byte length, latin1 body
+        (3, 0): ('<I', 'utf8'),     # v3.0 — 4-byte length, UTF-8 body  ← NEW in py3
+    }
+
+py2 equivalent (format.py:527-532):
+    if version == (1, 0):
+        hlength_type = '<H'
+    elif version == (2, 0):
+        hlength_type = '<I'
+    # NO encoding concept. No v3.0 support. Encoding is implicit.
+
+DIFF: py2 has no encoding table and no v3.0. The encoding of the header
+      bytes is never named — it is used as whatever str() gives you in py2,
+      which on py2 means raw bytes/latin1 implicitly.
+
+--------------------------------------------------------------
+1B. struct.unpack PATH (nearly identical — safe)
+--------------------------------------------------------------
+py2  format.py:534-535:
+    hlength_str = _read_bytes(fp, struct.calcsize(hlength_type), "array header length")
+    header_length = struct.unpack(hlength_type, hlength_str)[0]
+
+py3  _format_impl.py:634-635:
+    hlength_str = _read_bytes(fp, struct.calcsize(hlength_type), "array header length")
+    header_length = struct.unpack(hlength_type, hlength_str)[0]
+
+    IDENTICAL. hlength_str is always bytes (from _read_bytes).
+    struct.unpack consumes bytes → int. No str/bytes confusion here.
+
+--------------------------------------------------------------
+1C. header AFTER _read_bytes — THE KEY DIVERGENCE
+--------------------------------------------------------------
+py2  format.py:536, 544:
+    header = _read_bytes(fp, header_length, "array header")   # → bytes
+    header = _filter_header(header)                           # ← still bytes
+    d = safe_eval(header)                                     # eval bytes as-is
+    # NO .decode() CALL — header stays as bytes/str (same thing in py2)
+
+py3  _format_impl.py:636-637:
+    header = _read_bytes(fp, header_length, "array header")   # → bytes
+    header = header.decode(encoding)                          # → str (unicode)
+    #  encoding is 'latin1' for v1.0/v2.0, 'utf8' for v3.0
+
+DIFF: py2 feeds raw bytes into eval(). py3 explicitly decodes to str first.
+      In py2, safe_eval(bytes_str) works because py2 str IS bytes.
+      In py3, ast.literal_eval(bytes) would CRASH — the .decode() is mandatory.
+
+      If a .npy file header was written with non-ASCII field names on py2 using
+      latin1 encoding, the py3 path correctly decodes it as latin1 → str.
+      If the same file is opened on py3 WITHOUT .decode() (e.g. if that line
+      were missing), ast.literal_eval receives bytes → TypeError.
+
+--------------------------------------------------------------
+1D. DOWNSTREAM USE OF header (after decode)
+--------------------------------------------------------------
+Both py2 and py3:
+    d = ast.literal_eval(header)    [py3] / safe_eval(header) [py2]
+    # d is a dict: {'shape': ..., 'fortran_order': ..., 'descr': ...}
+    shape        = d['shape']          # tuple of ints
+    fortran_order = d['fortran_order'] # bool
+    dtype        = descr_to_dtype(d['descr'])   # str → numpy dtype
+
+py3 only — extra guard (py2 lacked this):
+    _format_impl.py:660-672:
+    except SyntaxError:
+        if version <= (2, 0):
+            header = _filter_header(header)   # strips Python2 'L' suffixes
+            ...
+            warnings.warn("...created on Python 2. Save the file again...")
+
+    This guard explicitly handles Python 2 legacy files.
+    py2 had no equivalent; it always ran _filter_header unconditionally (line 544).
+
+--------------------------------------------------------------
+1E. magic() FUNCTION — py2/py3 GUARD REMOVED IN py3
+--------------------------------------------------------------
+py2  format.py:203-206:
+    if sys.version_info[0] < 3:
+        return MAGIC_PREFIX + chr(major) + chr(minor)   # py2: str + str = str
+    else:
+        return MAGIC_PREFIX + bytes([major, minor])     # py3: bytes + bytes = bytes
+
+py3  _format_impl.py — no sys.version_info guard. Always:
+    return MAGIC_PREFIX + bytes([major, minor])
+
+    MAGIC_PREFIX = b'\x93NUMPY' in both versions.
+
+--------------------------------------------------------------
+1F. read_magic() — magic byte comparison
+--------------------------------------------------------------
+py2  format.py:224-227:
+    if sys.version_info[0] < 3:
+        major, minor = map(ord, magic_str[-2:])   # bytes → ints via ord()
+    else:
+        major, minor = magic_str[-2:]              # py3: indexing bytes → int
+
+py3  _format_impl.py:246:
+    major, minor = magic_str[-2:]   # bytes indexing → int directly. Guard gone.
+
+    DIFF: py2 needs ord() because bytes[-1] returns a 1-char str in py2.
+          py3 bytes[-1] returns int directly. The guard was load-bearing in py2.
+          py3 dropped it cleanly — correct.
+
+--------------------------------------------------------------
+1G. fromfile / frombuffer split — IDENTICAL STRUCTURE, safe
+--------------------------------------------------------------
+py2  format.py:710-736:                    py3  _format_impl.py:847-873:
+    if isfileobj(fp):                          if isfileobj(fp):
+        array = numpy.fromfile(...)                array = numpy.fromfile(...)
+    else:                                      else:
+        data = _read_bytes(...)                    data = _read_bytes(...)
+        array[i:i+n] = numpy.frombuffer(...)       array[i:i+n] = numpy.frombuffer(...)
+
+    _read_bytes() → bytes in both py2 and py3.
+    numpy.frombuffer(bytes, dtype=...) → safe in both. No str/bytes confusion.
+
+==============================================================
+TARGET 2 — NpzFile.__getitem__  magic byte comparison
+  lib/npyio.py  ↔  lib/_npyio_impl.py
+==============================================================
+
+--------------------------------------------------------------
+2A. MAGIC READ AND COMPARISON
+--------------------------------------------------------------
+py2  npyio.py:255-264:
+    bytes = self.zip.open(key)
+    magic = bytes.read(len(format.MAGIC_PREFIX))    # reads b'\x93NUMPY' length
+    bytes.close()
+    if magic == format.MAGIC_PREFIX:                # bytes == bytes  ← correct
+        bytes = self.zip.open(key)                  # re-open (close+reopen)
+        return format.read_array(bytes, ...)
+    else:
+        return self.zip.read(key)                   # raw bytes returned
+
+py3  _npyio_impl.py:245-264:
+    with self.zip.open(key) as bytes:
+        magic = bytes.read(len(format.MAGIC_PREFIX))
+        bytes.seek(0)                               # seek back instead of reopen
+        if magic == format.MAGIC_PREFIX:            # bytes == bytes  ← correct
+            return format.read_array(bytes, ...)
+        else:
+            return bytes.read()                     # raw bytes returned
+
+COMPARISON:
+  - Both compare bytes to bytes (MAGIC_PREFIX = b'\x93NUMPY'). Safe.
+  - py2: close() + re-open(). py3: seek(0). Both reset to start.
+  - py3 uses context manager (with). py2 manually calls close().
+  - py3 eliminates the redundant open() call — same correctness, less I/O.
+  - Neither version has a str vs bytes confusion here.
+
+--------------------------------------------------------------
+2B. np.load() magic sniff  (npyio.py:429-441 / _npyio_impl.py:461-...)
+--------------------------------------------------------------
+py2  npyio.py:429-441:
+    N = len(format.MAGIC_PREFIX)
+    magic = fid.read(N)
+    ...
+    if magic.startswith(_ZIP_PREFIX) or magic.startswith(_ZIP_SUFFIX):
+        ...
+    elif magic == format.MAGIC_PREFIX:
+
+py3  _npyio_impl.py:461+:
+    magic = fid.read(N)
+    ...  (same structure)
+
+    Both compare bytes to bytes literals. MAGIC_PREFIX is b'\x93NUMPY' in both.
+    _ZIP_PREFIX = b'PK\x03\x04' (bytes literal). Safe in both.
+
+==============================================================
+TARGET 3 — f2py/crackfortran.py:318  open("rb") path
+==============================================================
+
+py3  crackfortran.py:310-329:
+    310: if charset_normalizer is not None:
+    311:     encoding = charset_normalizer.from_path(filename).best().encoding
+    312: else:
+    316:     nbytes = min(32, os.path.getsize(filename))
+    317:     with open(filename, 'rb') as fhandle:
+    318:         raw = fhandle.read(nbytes)             # → bytes
+    319:         if raw.startswith(codecs.BOM_UTF8):    # bytes.startswith(bytes) ✓
+    320:             encoding = 'UTF-8-SIG'
+    321:         elif raw.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
+    322:             encoding = 'UTF-32'
+    323:         elif raw.startswith((codecs.BOM_LE, codecs.BOM_BE)):
+    324:             encoding = 'UTF-16'
+    325:         else:
+    326:             encoding = 'ascii'
+    327: return open(filename, mode, encoding=encoding)   # ← decoded text open
+
+    bytes USED AS: BOM detection only. Never used as str. Fully safe.
+    The raw bytes are compared to codecs.BOM_* constants (which are bytes).
+    Then discarded — the encoding name (str) is passed to the final open().
+
+py2 equivalent:
+    There is NO open("rb") in py2's crackfortran.py at this location.
+    BOM detection / charset_normalizer integration was ADDED in py3.
+    py2 crackfortran simply opens files without BOM detection.
+
+==============================================================
+SUMMARY: str/bytes CONFUSION INVENTORY
+==============================================================
+
+Site                           | py2 issue?          | py3 issue?         | Status
+-------------------------------+---------------------+--------------------+--------
+format._read_array_header      | None — bytes as str | None — explicit    | SAFE
+  header parsing               | is valid in py2     | .decode() call     |
+                               |                     |                    |
+format.magic() version guard   | Needed chr() for    | Removed — always   | SAFE
+                               | py2 str concat      | bytes([major,minor])|
+                               |                     |                    |
+format.read_magic() ord() guard| Needed map(ord,..): | Removed — bytes[-1]| SAFE
+                               | py2 bytes[-1]=str   | returns int in py3 |
+                               |                     |                    |
+NpzFile.__getitem__            | bytes==bytes ✓      | bytes==bytes ✓     | SAFE
+  magic comparison             |                     |                    |
+                               |                     |                    |
+np.load() magic sniff          | bytes==bytes ✓      | bytes==bytes ✓     | SAFE
+                               |                     |                    |
+frombuffer(data, dtype)        | data is bytes ✓     | data is bytes ✓    | SAFE
+  array data path              |                     |                    |
+                               |                     |                    |
+crackfortran BOM detection     | Did not exist       | raw.startswith(    | SAFE
+                               |                     | codecs.BOM_*)      |
+
+==============================================================
+SINGLE LATENT RISK SITE IDENTIFIED
+==============================================================
+
+lib/_format_impl.py:637
+    header = header.decode(encoding)
+
+  If a .npy file was created on Python 2 with a dtype whose field name
+  contains a byte value >127 (technically valid in latin1), and version
+  is (1,0) or (2,0), then:
+
+    encoding = 'latin1'   (from _header_size_info)
+    header.decode('latin1')  →  str   ← CORRECT — latin1 decodes every byte
+
+  This is safe BECAUSE latin1 maps every byte 0x00-0xFF to the same codepoint.
+
+  HOWEVER: the py3 v3.0 format writes UTF-8 headers. If a corrupted or
+  hand-crafted .npy claims version (3,0) but contains latin1 bytes >127,
+  .decode('utf8') will raise UnicodeDecodeError — UNCAUGHT at this level.
+  The caller (read_array) has no try/except around _read_array_header().
+
+  File: lib/_format_impl.py
+  Line: 637  header = header.decode(encoding)
+  Condition: version=(3,0) + non-UTF8 bytes in header
+  Impact: UnicodeDecodeError propagates to np.load() caller uncaught
+
+==============================================================
+KEY ARCHITECTURAL DIFFERENCE (MIGRATION INSIGHT)
+==============================================================
+
+py2 format.py                     py3 _format_impl.py
+----------------------------------+--------------------------------
+- header stays as bytes after     | + header.decode(encoding) → str
+  _read_bytes; py2 str IS bytes   |   required before ast.literal_eval
+                                  |
+- magic() has sys.version_info    | + No version guards; always bytes
+  guard for chr() vs bytes()      |
+                                  |
+- read_magic() needs map(ord,..)  | + bytes[-1] directly is int
+                                  |
+- _filter_header always called    | + _filter_header only on SyntaxError
+  (py2-L-suffix cleanup)          |   with warning for py2-created files
+                                  |
+- No encoding concept             | + _header_size_info encoding table
+                                  |   supports v3.0 UTF-8 headers
+                                  |
+- safe_eval (restricted eval)     | + ast.literal_eval (stricter, standard)

@@ -1,0 +1,288 @@
+==============================================================
+EXTENDED PATTERN SCAN — numpy py3_codebase
+==============================================================
+Scope    : numpy/**/*.py  (production code; tests/docs/build excluded)
+Compared : py3 HEAD (v2.6.0dev)  vs  py2 v1.16.6 where noted
+Date     : 2026-05-26
+
+Legend:  [SAFE]    no issue
+         [WATCH]   unusual but intentional; document it
+         [RISK]    active latent risk or migration residue
+         [PY2-OBS] pattern existed in py2, now obsolete/clean in py3
+
+==============================================================
+PATTERN 1 — str(.*decode  (bytes used as str without explicit decode)
+==============================================================
+Production hits: ZERO
+Test hit (excluded): _core/tests/test_stringdtype.py:200
+    str(d.decode('utf-8'))  — test only, not production
+
+STATUS: [SAFE]
+
+==============================================================
+PATTERN 2 — except Exception: / except:  (broad exception swallowing)
+==============================================================
+Production-only hits (tests excluded):
+
+--- INTENTIONAL / SAFE (return-False or return-NotImplemented pattern) ---
+
+_core/numeric.py:1158         tensordot() — try: iter(axes) except → treat as int count
+_core/numeric.py:2531         array_equal() — except → return False (asarray failed)
+_core/numeric.py:2599,2603    array_equiv() — except → return False (asarray/broadcast)
+_core/numerictypes.py:171     issubsctype() — except → return False
+_core/numerictypes.py:223     issubsctype() — except → return False
+_core/_internal.py:954        is_ctypes_type() — except → return False
+_core/records.py:463          recarray.__setattr__ — try object.__setattr__, re-raises
+_core/records.py:476          recarray.__setattr__ — try object.__delattr__, returns ret
+polynomial/_polybase.py:534   __add__ — except → return NotImplemented
+polynomial/_polybase.py:542   __sub__ — except → return NotImplemented
+polynomial/_polybase.py:550   __mul__ — except → return NotImplemented
+polynomial/_polybase.py:583   __truediv__ → NotImplemented
+polynomial/_polybase.py:597   __pow__ → NotImplemented
+polynomial/_polybase.py:604   __radd__ → NotImplemented
+polynomial/_polybase.py:611   __rsub__ → NotImplemented
+polynomial/_polybase.py:637   __rmul__ → NotImplemented
+matrixlib/defmatrix.py:213    __mul__ — returns NotImplemented
+_core/function_base.py:486    linspace/geomspace fallback
+lib/_utils_impl.py:359,374    source() introspection — except → skip
+
+STATUS: [SAFE] — all are the standard "return False / NotImplemented on
+         conversion failure" idiom used throughout numpy's numeric tower.
+
+--- WATCH: f2py/crackfortran.py — 13 broad except sites ---
+
+crackfortran.py:1150   except Exception: pass    — Fortran USE stmt parsing
+crackfortran.py:1164   except Exception: pass    — Fortran COMMON parsing
+crackfortran.py:1174   except Exception: pass    — Fortran EQUIVALENCE
+crackfortran.py:1302   except Exception: pass    — attribute resolution
+crackfortran.py:1376   except Exception: continue — implicit char range
+crackfortran.py:1962   except Exception: pass    — expression evaluation
+crackfortran.py:2307   except Exception: pass    — dtype resolution
+crackfortran.py:2345   except Exception: continue — parameter loop
+crackfortran.py:2533   except Exception as msg: outmess(...)  ← logs, does not re-raise
+crackfortran.py:2640   except Exception: pass    — value evaluation
+crackfortran.py:2649   except Exception: pass    — value evaluation
+crackfortran.py:2911   except Exception: pass    — expression parser
+crackfortran.py:2918   except Exception: pass    — expression parser
+crackfortran.py:3472   except Exception: pass    — final pass cleanup
+
+f2py/capi_maps.py:300    except Exception: pass  — C type mapping
+f2py/capi_maps.py:449    except Exception: pass  — C type mapping
+
+STATUS: [WATCH] — These swallow parsing exceptions silently (only 2533 logs).
+  If a Fortran file contains unexpected encoding (non-ASCII in a bytes read
+  by crackfortran.py:318), a decoding/parsing error at any of these 14 sites
+  would be silently absorbed, producing incorrect f2py output with no error.
+  Not an exploitable crash, but a silent data-corruption class.
+
+--- ma/core.py ---
+
+ma/core.py:1097    try: ... except Exception: — MaskedArray.__new__ fallback
+ma/core.py:1237    try: ... except Exception: — MaskedArray.view fallback
+
+STATUS: [WATCH] — MaskedArray construction exceptions swallowed; may hide
+  dtype coercion failures silently.
+
+==============================================================
+PATTERN 3 — .encode())  (no-arg encode, defaults to utf-8)
+==============================================================
+Production hits: ZERO
+Test hits only (f2py/tests/test_character.py:96, lib/tests/test_io.py:1559)
+
+STATUS: [SAFE]
+
+==============================================================
+PATTERN 4 — pickle.loads  (deserializing untrusted bytes)
+==============================================================
+Production hits: ZERO in non-test, non-docstring code
+Docstring reference: _core/records.py:703 — example usage only
+
+All real pickle.loads are in test files. Production deserialization goes
+through lib/_format_impl.py:read_array() → pickle.load(fp) (not loads).
+
+STATUS: [SAFE] — production never calls pickle.loads on raw bytes directly.
+
+==============================================================
+PATTERN 5 — bytes(str...) / str(bytes...)  (explicit conversion)
+==============================================================
+
+lib/_format_impl.py:242    magic_str = _read_bytes(...)  — variable name, NOT str type
+lib/_format_impl.py:634    hlength_str = _read_bytes(...)— variable name, NOT str type
+  Both variables hold bytes despite "_str" suffix. Historical naming artifact.
+
+_core/code_generators/generate_umath.py:234-235  [BUILD TOOL — excluded]
+    bytes(string.ascii_lowercase, "ascii")
+    bytes(string.ascii_uppercase, "ascii")
+    This is correct py3 idiom; not a conversion bug.
+
+STATUS: [SAFE] — variable naming is misleading but not a bug.
+  [NOTE] _format_impl.py:242,634 variable names "magic_str" and "hlength_str"
+         both hold bytes objects. If a reader assumes _str suffix means str
+         type and passes them to str-expecting code, a TypeError results.
+         This is a documentation/naming clarity issue, not a runtime risk.
+
+==============================================================
+PATTERN 6 — hasattr(x, '__iter__')  (iterable detection)
+==============================================================
+
+lib/recfunctions.py:293
+    if (hasattr(element, '__iter__') and ...):
+    — checks for nested array; standard pattern.
+
+lib/_iotools.py:181     delimiter iterable check
+lib/_iotools.py:572     converter function iterable check
+lib/_iotools.py:756     value iterable check
+
+ma/core.py:1861         MaskedArray element iterable check
+ma/core.py:2593         flatten_sequence(): hasattr(__iter__) and NOT isinstance(str,bytes)
+ma/extras.py:344        flatten nested sequence
+
+STATUS: [SAFE] — ma/core.py:2593 correctly guards against treating str/bytes
+         as iterables (would infinitely recurse). The guard is explicit and correct.
+
+==============================================================
+PATTERN 7 — isinstance(x, (str, bytes))  (type-guarded conversion)
+==============================================================
+
+PRODUCTION HITS:
+
+ma/core.py:2593
+    if hasattr(elm, "__iter__") and not isinstance(elm, (str, bytes)):
+    — recursion guard in flatten_sequence(). Correct: both str and bytes
+      are "iterable" in Python 3 but should not be flattened as sequences.
+    STATUS: [SAFE]
+
+lib/_npyio_impl.py:1374-1377  (loadtxt() comments normalization)
+    if isinstance(comment, (str, bytes)):
+        comment = [comment]              # wrap scalar in list
+    comment = [
+        x.decode('latin1') if isinstance(x, bytes) else x
+        for x in comment]               # normalize all to str
+    — Explicit migration shim: bytes comments decoded to latin1 before
+      passing to C-level _read(). Encoding is hardcoded to latin1.
+    STATUS: [WATCH] — latin1 is correct for ASCII comment chars but will
+      silently mis-decode bytes with values >127 as latin1 codepoints
+      instead of raising an error. Caller gets wrong comment char, not error.
+
+lib/_npyio_impl.py:1706  (fromregex() — bytes/str regexp coercion)
+    content = file.read()
+    if isinstance(content, bytes) and isinstance(regexp, str):
+        regexp = asbytes(regexp)        # coerce str regexp to bytes
+    if not hasattr(regexp, 'match'):
+        regexp = re.compile(regexp)
+    seq = regexp.findall(content)
+    — asbytes() is still imported from numpy.compat.
+    — Pattern: file opened in binary mode gives bytes content; str regexp
+      is coerced to bytes. This is correct for ASCII regexp patterns.
+    STATUS: [RISK] — if regexp contains non-ASCII chars (e.g. Unicode
+      character class), asbytes(regexp) either encodes as latin1 silently
+      or raises UnicodeEncodeError. The coercion is undocumented in the
+      public API. A user passing a unicode regexp against a binary file
+      gets silent wrong results (latin1 encoding of the regexp) rather
+      than a clear error.
+
+_core/defchararray.py:1296  (char array constructor)
+    if isinstance(obj, (bytes, str)):
+        if unicode is None:
+            if isinstance(obj, str):   unicode = True
+            else:                      unicode = False
+    — Correctly distinguishes str (unicode array) from bytes (bytes array).
+    STATUS: [SAFE]
+
+==============================================================
+PATTERN 8 — .decode()  (no-arg decode, defaults to utf-8)
+==============================================================
+Production hits: ZERO
+All .decode() calls in tests only.
+
+STATUS: [SAFE]
+
+==============================================================
+PATTERN 9 — map(ord, ...) / chr(...)  (py2 byte ↔ int idioms)
+==============================================================
+
+py3 PRODUCTION:
+
+f2py/crackfortran.py:1386-1387
+    for o in range(ord(begc), ord(endc) + 1):
+        impl[chr(o)] = decl
+    Context: builds implicit type map from Fortran IMPLICIT statement
+             e.g. IMPLICIT INTEGER (A-H). ord/chr on single ASCII chars.
+    STATUS: [SAFE] — standard ASCII range iteration; not a migration artifact.
+
+f2py/crackfortran.py:2537-2538
+    if isstring(vars[n]) and isinstance(params[n], int):
+        params[n] = chr(params[n])
+    Context: Fortran CHARACTER parameter stored as int → convert to char.
+    STATUS: [WATCH] — chr() raises ValueError for values outside [0,0x10FFFF].
+      In practice Fortran characters are ASCII so max value is 127. However if
+      a malformed Fortran file encodes a char param as a large int (>1114111),
+      this site raises an uncaught ValueError that propagates to the caller.
+
+py2 EQUIVALENTS (now removed from py3):
+
+format.py:204   chr(major) + chr(minor)  → replaced by bytes([major, minor])
+format.py:225   map(ord, magic_str[-2:]) → removed; py3 bytes[-1] is int
+_string_helpers.py:9  [chr(_m) for _m in range(256)] → check py3 version
+
+STATUS: [PY2-OBS] — py2 chr()/ord() usage for byte manipulation removed cleanly.
+
+==============================================================
+PATTERN 10 — iteritems / itervalues / iterkeys / has_key
+==============================================================
+
+py3 production: ZERO MATCHES — fully removed.
+
+py2 (v1.16.6) had:
+    lib/npyio.py:274  NpzFile.iteritems()  — deprecated py3 wrapper (warned)
+    lib/npyio.py:282  NpzFile.iterkeys()   — deprecated py3 wrapper (warned)
+    (no has_key, no itervalues)
+
+STATUS: [PY2-OBS] — Clean removal. py2's deprecated wrappers are gone;
+         no py2 dict-API remnants in py3 production code.
+
+==============================================================
+PRIORITY SUMMARY
+==============================================================
+
+Priority  | File                             | Line   | Issue
+----------+----------------------------------+--------+----------------------------------------------
+RISK      | lib/_npyio_impl.py               | 1706   | asbytes(regexp) silently mis-encodes
+          |                                  |        | non-ASCII str regexp against binary file.
+          |                                  |        | asbytes() still imported from numpy.compat.
+          |                                  |        |
+WATCH     | lib/_npyio_impl.py               | 1374-  | bytes comments hardcoded latin1 decode.
+          |                                  | 1377   | Values >127 silently mis-decoded, no error.
+          |                                  |        |
+WATCH     | f2py/crackfortran.py             | 14     | 14 bare except: pass sites in Fortran
+          |                                  | sites  | parser. Silently swallows encoding errors
+          |                                  |        | from BOM-detection path (line 318).
+          |                                  |        |
+WATCH     | f2py/crackfortran.py             | 2538   | chr(params[n]) uncaught ValueError if
+          |                                  |        | Fortran int param > 1,114,111.
+          |                                  |        |
+WATCH     | lib/_format_impl.py              | 242,   | Variables named *_str hold bytes.
+          |                                  | 634    | Naming inconsistency; not a runtime bug.
+          |                                  |        |
+SAFE      | ALL other patterns               | —      | No str/bytes confusion in production code.
+
+==============================================================
+py2 → py3 MIGRATION COMPLETENESS SCORE
+==============================================================
+
+Item                              | py2 (v1.16.6)        | py3 (HEAD)       | Status
+----------------------------------+----------------------+------------------+--------
+sys.version_info guards in lib/  | 20+ guards           | 0                | CLEAN
+asbytes / asstr / asunicode       | Used in ~15 files    | Only in compat   | CLEAN*
+                                  |                      | shim (1 import)  |
+iteritems / iterkeys / has_key    | 2 deprecated stubs   | 0                | CLEAN
+map(ord, bytes[-2:]) guard        | format.py:225        | Removed          | CLEAN
+chr(major)+chr(minor)             | format.py:204        | Removed          | CLEAN
+_all_chars chr(range(256))        | _string_helpers.py:9 | Removed          | CLEAN
+header.decode() explicit          | Not needed (py2 str  | Present, correct | CLEAN
+                                  | IS bytes)            |                  |
+v3.0 UTF-8 header support         | Not present          | Added            | CLEAN
+_filter_header always called      | Yes, unconditional   | Only on SyntaxErr| CLEAN
+
+* asbytes still imported in _npyio_impl.py:1707 (see RISK item above).
+  All other uses eliminated.

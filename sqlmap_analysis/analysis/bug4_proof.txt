@@ -1,0 +1,112 @@
+﻿py : Could not find platform independent libraries <prefix>
+At line:1 char:71
++ ... analysis\py3_codebase"; py -3 "..\analysis\test_bug4.py" 2>&1 | Out-F ...
++                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Could not find ...raries <prefix>:String) [], Remot 
+   eException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+--------------------------------------------------------------
+ENVIRONMENT
+--------------------------------------------------------------
+Python : 3.14.5 (tags/v3.14.5:5607950, May 10 2026, 10:43:50) [MSC v.1944 64 bit (AMD64)]
+
+--------------------------------------------------------------
+STEP 1: str has no .decode() in Python 3 � the root cause
+--------------------------------------------------------------
+type(str('hello')) = <class 'str'>
+hasattr(str, 'decode') = False
+[PASS] str.decode does not exist in Python 3
+
+--------------------------------------------------------------
+STEP 2: Reproduce line 488 exactly � str(self).decode(...)
+--------------------------------------------------------------
+[PASS] __str__(nav) = 'test content'  (no crash � line 490 has py2/py3 guard)
+[PASS] __unicode__() raises AttributeError: 'str' object has no attribute 'decode'
+
+--------------------------------------------------------------
+STEP 3: Live import � crash NavigableString from beautifulsoup.py
+--------------------------------------------------------------
+[INFO] NavigableString imported successfully
+[INFO] NavigableString instance: 'hello world', type: <class 'thirdparty.beautifulsoup.beautifulsoup.NavigableString'>
+[PASS] str(NavigableString) = 'hello world'  (__str__ works)
+[PASS] ns.__unicode__() raises AttributeError: 'str' object has no attribute 'decode'
+
+--------------------------------------------------------------
+STEP 4: The asymmetry � __str__ guarded, __unicode__ not
+--------------------------------------------------------------
+
+Line 487-488  __unicode__ (NO guard):
+    def __unicode__(self):
+        return str(self).decode(DEFAULT_OUTPUT_ENCODING)   # CRASH on Py3
+
+Line 490-496  __str__ (HAS guard):
+    def __str__(self, encoding=DEFAULT_OUTPUT_ENCODING):
+        data = self.BARE_AMPERSAND_OR_BRACKET.sub(self._sub_entity, self)
+        if encoding and sys.version_info < (3, 0):   # <-- guard exists
+            return data.encode(encoding)
+        else:
+            return data
+
+[INFO] The developer added sys.version_info < (3,0) to __str__ but NOT to __unicode__
+[PASS] The missing guard in __unicode__ is the exact bug
+
+--------------------------------------------------------------
+STEP 5: When does __unicode__ actually get called?
+--------------------------------------------------------------
+
+Python 2 triggers:
+  unicode(nav_string)  ->  calls __unicode__() automatically
+  '%s' % nav_string    ->  may call __unicode__ via coercion
+
+Python 3 triggers:
+  nav_string.__unicode__()  ->  direct call  ->  AttributeError CRASH
+[PASS] unicode() does not exist in Python 3: name 'unicode' is not defined
+[INFO] Runtime never auto-calls __unicode__ in Py3 � crash only on explicit .call
+
+--------------------------------------------------------------
+STEP 6: The fix
+--------------------------------------------------------------
+
+Option A � guard matching __str__:
+    def __unicode__(self):
+        if sys.version_info >= (3, 0):
+            return str(self)
+        return str(self).decode(DEFAULT_OUTPUT_ENCODING)
+
+Option B � remove __unicode__ entirely:
+    Python 3 does not use __unicode__; __str__ already handles str()
+
+Option C � delegate to __str__:
+    def __unicode__(self):
+        return NavigableString.__str__(self)
+
+[PASS] Fixed __unicode__() returns 'fixed content'  (type=str)
+
+--------------------------------------------------------------
+SUMMARY
+--------------------------------------------------------------
+Python  : 3.14.5 (tags/v3.14.5:5607950, May 10 2026, 10:43:50) [MSC v.1944 64 bit (AMD64)]
+
+File    : thirdparty/beautifulsoup/beautifulsoup.py
+Class   : NavigableString  (line 461)
+Method  : __unicode__  (line 487)
+
+Buggy code:
+    def __unicode__(self):
+        return str(self).decode(DEFAULT_OUTPUT_ENCODING)  # line 488
+
+Root cause:
+    str.decode() was removed in Python 3.0
+    The sibling __str__ method (line 490) has an explicit sys.version_info
+    guard; __unicode__ does not
+
+Trigger:
+    Any explicit call to nav_string.__unicode__()
+    (Python 3 runtime never auto-calls __unicode__)
+
+Fix:
+    Add sys.version_info guard, OR remove __unicode__ (unused in Py3)
+
+All assertions passed.

@@ -1,0 +1,126 @@
+==============================================================
+DATA FLOW STEP 1 — BINARY DATA ORIGINS IN NUMPY (py3_codebase)
+==============================================================
+Codebase  : py3_codebase  (v2.6.0.dev0-4-gcf16ec13dc)
+Scope     : numpy/**/*.py  (excluding tests/, test_*, _add_newdocs.py docstrings)
+Date      : 2026-05-26
+
+--------------------------------------------------------------
+CATEGORY A — open("rb")  (file → raw bytes)
+--------------------------------------------------------------
+numpy/f2py/crackfortran.py:318
+    with open(filename, 'rb') as fhandle:
+        raw = fhandle.read(nbytes)          # line 319
+    Purpose: reads Fortran source as raw bytes to detect encoding
+
+numpy/_build_utils/tempita/_tempita.py:164
+    with open(filename, "rb") as f:
+        c = f.read()                        # line 165
+    Purpose: template engine reads template files as bytes
+
+numpy/_build_utils/tempita/_tempita.py:1104
+    with open(template_name, "rb") as f:
+        template_content = f.read()         # line 1105
+    Purpose: CLI entry-point reads template files as bytes
+
+--------------------------------------------------------------
+CATEGORY B — numpy.fromfile()  (file descriptor → ndarray)
+--------------------------------------------------------------
+numpy/lib/_format_impl.py:849
+    array = numpy.fromfile(fp, dtype=dtype, count=count)
+    Context: fast path in read_array() when fp is a real file object
+    Entry point: np.load() / np.fromfile()
+
+numpy/_core/records.py:838  (def fromfile)
+    Public API: np.rec.fromfile(fd, ...)
+    Wraps C-level fromfile; fd is a file path or open file object
+
+numpy/_core/records.py:1071
+    return fromfile(obj, dtype=dtype, shape=shape, offset=offset)
+    Context: recarray.__new__ dispatch when given a file object
+
+numpy/ma/core.py:8744  (def fromfile)
+    Stub — raises NotImplementedError:
+    "fromfile() not yet implemented for a MaskedArray."
+
+--------------------------------------------------------------
+CATEGORY C — numpy.frombuffer()  (buffer/bytes → ndarray)
+--------------------------------------------------------------
+numpy/_core/numeric.py:1903-1907  (_frombuffer internal helper)
+    def _frombuffer(buf, dtype, shape, order, axis_order=None):
+        array = frombuffer(buf, dtype=dtype)
+        return array.reshape(shape, order=order)
+    Callers: pickle deserialization path (__reduce__ reconstruct)
+
+numpy/ctypeslib/_ctypeslib.py:231
+    return np.frombuffer(buffer, dtype=full_dtype).squeeze(axis=0)
+    Context: ndpointer.__get__ — wraps a ctypes buffer as an ndarray
+
+numpy/lib/_format_impl.py:872
+    array[i:i+read_count] = numpy.frombuffer(data, dtype=dtype, count=read_count)
+    Context: slow/chunked path in read_array() for non-file-objects
+             (gzip streams, BytesIO, etc.); data comes from _read_bytes()
+
+--------------------------------------------------------------
+CATEGORY D — .read() on file-like objects  (stream → bytes)
+--------------------------------------------------------------
+numpy/lib/_format_impl.py:636   (inside _read_array_header)
+    hlength_str = _read_bytes(fp, struct.calcsize(hlength_type), "array header length")
+    header_length = struct.unpack(hlength_type, hlength_str)[0]   # only struct.unpack site
+    header = _read_bytes(fp, header_length, "array header")
+    header = header.decode(encoding)
+    Note: .decode() called on raw header bytes — py2/py3 neutral here (encoding is 'latin1')
+
+numpy/lib/_npyio_impl.py:246,264
+    magic = bytes.read(len(format.MAGIC_PREFIX))   # sniff .npy magic bytes from zip entry
+    return bytes.read()                            # fallback: return raw bytes for non-.npy entries
+    Context: NpzFile.__getitem__ — reads members of a .npz archive
+
+numpy/lib/_npyio_impl.py:461
+    magic = fid.read(N)
+    Context: np.load() — reads magic bytes to detect .npy format
+
+numpy/lib/_npyio_impl.py:1705
+    content = file.read()
+    Context: loadtxt() — reads entire text/binary file into memory
+
+--------------------------------------------------------------
+CATEGORY E — memoryview  (C buffer protocol → Python)
+--------------------------------------------------------------
+numpy/_core/_dtype_ctypes.py:14
+    mv = memoryview(ctype_0)
+    Context: _dtype_from_ctypes_type — inspects ctypes type layout via buffer protocol
+
+--------------------------------------------------------------
+SUMMARY TABLE
+--------------------------------------------------------------
+Pattern          | Files                                    | Count
+-----------------+------------------------------------------+------
+open("rb")       | f2py/crackfortran.py, _build_utils/      |   3
+                 | tempita/_tempita.py                      |
+numpy.fromfile() | lib/_format_impl.py, _core/records.py   |   4
+                 | ma/core.py (stub)                        |
+frombuffer()     | _core/numeric.py, ctypeslib/, lib/       |   3
+                 | _format_impl.py                          |
+.read() streams  | lib/_npyio_impl.py, lib/_format_impl.py |   5
+struct.unpack    | lib/_format_impl.py (header length only) |   1
+memoryview       | _core/_dtype_ctypes.py                   |   1
+-----------------+------------------------------------------+------
+TOTAL            |                                          |  17
+
+--------------------------------------------------------------
+KEY ENTRY POINTS FOR FURTHER ANALYSIS
+--------------------------------------------------------------
+1. np.load()         → lib/_npyio_impl.py  → lib/_format_impl.py
+2. np.fromfile()     → _core/records.py    → C extension
+3. np.frombuffer()   → _core/numeric.py    → C extension
+4. np.rec.fromfile() → _core/records.py:838
+5. f2py source parse → f2py/crackfortran.py:318
+
+--------------------------------------------------------------
+NEXT STEPS (Step 2 — py2 vs py3 diff)
+--------------------------------------------------------------
+- Compare each site above against py2_codebase (v1.16.6)
+- Focus on: header.decode() calls, bytes/str handling in _format_impl.py
+- Watch for: Python 2 'rb' vs 'r' open-mode bugs, str/bytes conflation
+- Key diff target: lib/format.py (py2) vs lib/_format_impl.py (py3)

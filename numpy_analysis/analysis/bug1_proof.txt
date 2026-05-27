@@ -1,0 +1,183 @@
+﻿C:\Python314\python.exe : Could not find platform independent libraries <prefix>
+At line:1 char:56
++ ... alysis\analysis"; C:\Python314\python.exe "test_bug1.py" 2>&1 | Out-F ...
++                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Could not find ...raries <prefix>:Strin 
+   g) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+==============================================================
+ENVIRONMENT
+==============================================================
+Python : 3.14.5 (tags/v3.14.5:5607950, May 10 2026, 10:43:50) [MSC v.1944 64 bit (AMD64)]
+
+==============================================================
+STEP 0: asbytes() definition  (numpy/_utils/_conversions.py)
+==============================================================
+def asbytes(s):
+    if isinstance(s, bytes):
+        return s
+    return str(s).encode('latin1')
+
+
+==============================================================
+STEP 1: What asbytes() does to str regexps
+==============================================================
+  asbytes('simple'            ) => b'simple'                       [ASCII only — safe]
+  asbytes('café'              ) => b'caf\xe9'                      [U+00E9 é  — latin1 range, silently encodes]
+  asbytes('café+'             ) => b'caf\xe9+'                     [U+00E9 with quantifier — silently encodes]
+  asbytes('αdata'             ) => UnicodeEncodeError: "'latin-1' codec can't encode character '\\u03b1' in position 0: ordinal not in range(256)"  [U+03B1 α  — outside latin1, should CRASH]
+  asbytes('中文'                ) => UnicodeEncodeError: "'latin-1' codec can't encode characters in position 0-1: ordinal not in range(256)"  [U+4E2D U+6587 — Chinese, outside latin1, CRASH]
+
+==============================================================
+STEP 2: Silent wrong result — UTF-8 binary content
+==============================================================
+  Binary content (UTF-8): b'record caf\xc3\xa9 42\nrecord nai\xcc\x88ve 99\n'
+  UTF-8 bytes for é: b'\xc3\xa9'  (2 bytes: \xc3\xa9)
+  latin1 byte for é: b'\xe9' (1 byte: \xe9)
+
+  User regexp (str): 'record (café) (\\d+)'
+  After asbytes():   b'record (caf\xe9) (\\d+)'
+  Note: asbytes encoded é as \xe9 (latin1)
+  But UTF-8 file has é as \xc3\xa9 — NO MATCH possible
+
+  np.fromregex result:  []
+  Expected:             1 row with key=b'café', val=42
+  Got:                  0 rows — SILENT EMPTY RESULT (wrong!)
+
+==============================================================
+STEP 3: False positive — latin1 binary content appears to work
+==============================================================
+  Binary content (latin1): b'record caf\xe9 42\nrecord nai\xefve 99\n'
+  latin1 byte for é: \xe9  — matches asbytes output
+
+  np.fromregex result:  [(b'caf\xe9', 42)]
+  Got 1 row(s) — APPEARS to work, but only
+  because this file happened to be latin1-encoded.
+  The coercion is encoding-assumption, not correctness.
+
+==============================================================
+STEP 4: UnicodeEncodeError crash — char outside latin1 range
+==============================================================
+  regexp: 'data \u03b1 (\\d+)'  (α = U+03B1, outside latin1)
+  [PASS] UnicodeEncodeError raised: "'latin-1' codec can't encode character '\\u03b1' in position 5: ordinal not in range(256)"
+  Origin in call stack:
+    result3 = np.fromregex(fh3, 'data α (\\d+)', dtype=[('val', np.int32)])
+    File "D:\Projects\CMU Projects\numpy_analysis\analysis\Lib\site-packages\numpy\lib\_npyio_impl.py", line 1709, in fromregex
+    regexp = asbytes(regexp)
+    File "D:\Projects\CMU Projects\numpy_analysis\analysis\Lib\site-packages\numpy\_utils\_convertions.py", line 18, in asbytes
+    return str(s).encode('latin1')
+    UnicodeEncodeError: 'latin-1' codec can't encode character '\u03b1' in position 5: ordinal not in range(256)
+
+==============================================================
+STEP 5: The missing elif — py2 vs py3 asymmetry
+==============================================================
+
+  py2 npyio.py:1513-1517:
+    content = file.read()
+    if isinstance(content, bytes) and isinstance(regexp, np.unicode):
+        regexp = asbytes(regexp)       # bytes file + unicode regexp
+    elif isinstance(content, np.unicode) and isinstance(regexp, bytes):
+        regexp = asstr(regexp)         # unicode file + bytes regexp  ← DROPPED
+
+  py3 _npyio_impl.py:1705-1707:
+    content = file.read()
+    if isinstance(content, bytes) and isinstance(regexp, str):
+        regexp = asbytes(regexp)       # only handles one direction
+
+  Result: in py3, if someone passes bytes regexp to a text-mode file,
+  there is NO coercion — re.compile(bytes_regexp).findall(str_content)
+  raises TypeError directly from re module.
+
+  Testing: str content + bytes regexp (the dropped elif path):
+  [OBSERVED] TypeError: cannot use a bytes pattern on a string-like object
+  py2 would have coerced bytes regexp → str via asstr()
+  py3 has no handler for this case — TypeError propagates
+
+==============================================================
+STEP 6: What the correct py3 code should look like
+==============================================================
+
+  CURRENT (py3, _npyio_impl.py:1706-1707):
+    if isinstance(content, bytes) and isinstance(regexp, str):
+        regexp = asbytes(regexp)          # hardcodes latin1 silently
+
+  CORRECT py3 fix (option A — raise on ambiguity):
+    if isinstance(content, bytes) and isinstance(regexp, str):
+        raise TypeError(
+            "Binary file content requires a bytes regexp. "
+            "Encode your regexp explicitly: regexp.encode('utf-8')"
+        )
+
+  CORRECT py3 fix (option B — respect caller's encoding param):
+    if isinstance(content, bytes) and isinstance(regexp, str):
+        enc = encoding or 'latin1'
+        regexp = regexp.encode(enc)       # use encoding param, not hardcoded
+
+  Root cause: asbytes() is a py2 compat shim. Its presence in py3
+  production code (imported at _npyio_impl.py:21) is the migration
+  residue. The function hardcodes latin1, which was py2's default
+  str encoding but is NOT a safe assumption in py3 where str is Unicode.
+
+==============================================================
+STEP 7: Confirm asbytes is a surviving compat shim in py3
+==============================================================
+  Module file: D:\Projects\CMU Projects\numpy_analysis\analysis\Lib\site-packages\numpy\_utils\_convertions.py
+  __all__: ['asunicode', 'asbytes']
+
+  Full source:
+    """
+    A set of methods retained from np.compat module that
+    are still used across codebase.
+    """
+    
+    __all__ = ["asunicode", "asbytes"]
+    
+    
+    def asunicode(s):
+        if isinstance(s, bytes):
+            return s.decode('latin1')
+        return str(s)
+    
+    
+    def asbytes(s):
+        if isinstance(s, bytes):
+            return s
+        return str(s).encode('latin1')
+
+  The module comment says 'retained from np.compat module'.
+  asbytes() and asunicode() are legacy functions kept alive
+  only because production code still references them.
+
+  Uses of asbytes in _npyio_impl.py (py3):
+    line 1707: fromregex() — the bug site
+    line 2224: loadtxt() byte_converters path — secondary use
+
+==============================================================
+SUMMARY
+==============================================================
+
+  BUG: numpy/lib/_npyio_impl.py:1706-1707
+  TYPE: Migration residue — py2 compat shim (asbytes) in py3 code
+  SEVERITY:
+    - SILENT WRONG RESULT when binary file is UTF-8 encoded and
+      regexp contains non-ASCII chars (e.g., é, ñ, ü)
+    - UnicodeEncodeError CRASH when regexp contains chars > U+00FF
+      (e.g., Greek, CJK, emoji)
+
+  ROOT CAUSE:
+    asbytes() was py2's "unicode → bytes" bridge using latin1.
+    In py3, all strings are Unicode. The latin1 assumption is wrong
+    for any file not encoded in latin1/iso-8859-1.
+
+  EVIDENCE:
+    - Step 2: fromregex on UTF-8 file returns [] instead of 1 row
+    - Step 4: fromregex crashes with UnicodeEncodeError on α regexp
+    - Step 5: The elif branch for the reverse case was silently dropped
+    - Step 7: asbytes defined in _conversions.py with comment
+              "retained from np.compat module"
+
+  FIX: Remove the asbytes coercion. Either raise TypeError asking
+       the user to encode their regexp, or encode using the
+       encoding= parameter already present in the function signature.
+

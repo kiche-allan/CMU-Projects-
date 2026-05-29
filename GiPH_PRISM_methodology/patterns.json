@@ -1,0 +1,455 @@
+{
+  "methodology": "GiPH/PRISM Migration Bug Detection",
+  "total_patterns": 40,
+  "groups": 7,
+  "patterns": [
+
+    {
+      "id": 1,
+      "group": 1,
+      "group_name": "Bytes/str separation",
+      "pattern": "ord(c)",
+      "grep_command": "grep -rn \"ord(\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "In Python 2, bytes[i] returns a str of length 1, so ord(c) is required. In Python 3, bytes[i] returns int directly, making ord(int) a TypeError.",
+      "python2_behavior": "bytes[i] returns str of length 1; ord(c) returns int — correct",
+      "python3_behavior": "bytes[i] returns int; ord(int) raises TypeError: ord() expected string of length 1, but int found",
+      "example_bug": "c = data[0]; val = ord(c)  # crashes in Python 3 if data is bytes"
+    },
+    {
+      "id": 2,
+      "group": 1,
+      "group_name": "Bytes/str separation",
+      "pattern": "chr(c)",
+      "grep_command": "grep -rn \"chr(\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "In Python 2, chr() returns a str (bytes). In Python 3, chr() returns a unicode str. Binary write operations expecting bytes receive str instead.",
+      "python2_behavior": "chr(65) returns b'A' (1-byte str) — valid for binary output",
+      "python3_behavior": "chr(65) returns 'A' (unicode str) — TypeError when concatenated with bytes or written to binary stream",
+      "example_bug": "buf += chr(0x00)  # TypeError: can only concatenate str to str, not bytes"
+    },
+    {
+      "id": 3,
+      "group": 1,
+      "group_name": "Bytes/str separation",
+      "pattern": "return \"\"",
+      "grep_command": "grep -rn \"return \\\"\\\"\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "Function returns empty str literal but also returns bytes in other branches. In Python 2 str == bytes so mixing was silent. In Python 3 returns inconsistent type.",
+      "python2_behavior": "return '' and return b'data' have the same type — str",
+      "python3_behavior": "return '' is str; return b'data' is bytes — caller receives inconsistent types causing downstream TypeError",
+      "example_bug": "def read_header(): return b'' if data else ''  # mixed return types"
+    },
+    {
+      "id": 4,
+      "group": 1,
+      "group_name": "Bytes/str separation",
+      "pattern": ".find(str) on bytes",
+      "grep_command": "grep -rn \"\\.find(\\\"\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "bytes.find(str) always returns -1 in Python 3 with no error. In Python 2, str.find(str) worked because bytes == str.",
+      "python2_behavior": "data.find('\\n') on a str (bytes) finds the newline — returns index",
+      "python3_behavior": "data.find('\\n') on bytes always returns -1 silently — logic error, no crash",
+      "example_bug": "pos = data.find('\\r\\n')  # always -1 when data is bytes in Python 3"
+    },
+    {
+      "id": 5,
+      "group": 1,
+      "group_name": "Bytes/str separation",
+      "pattern": ".split(str) on bytes",
+      "grep_command": "grep -rn \"\\.split(\\\"\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "bytes.split(str) raises TypeError in Python 3. In Python 2, str.split(str) was valid because bytes == str.",
+      "python2_behavior": "data.split('\\n') on str (bytes) splits on newline — returns list of str",
+      "python3_behavior": "data.split('\\n') on bytes raises TypeError: a bytes-like object is required, not 'str'",
+      "example_bug": "lines = raw_data.split('\\n')  # TypeError when raw_data is bytes"
+    },
+    {
+      "id": 6,
+      "group": 1,
+      "group_name": "Bytes/str separation",
+      "pattern": ".startswith(str) on bytes",
+      "grep_command": "grep -rn \"\\.startswith(\\\"\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "bytes.startswith(str) always returns False in Python 3 with no error. Silent logic failure.",
+      "python2_behavior": "data.startswith('GET') on str (bytes) returns True if data begins with those bytes",
+      "python3_behavior": "data.startswith('GET') on bytes always returns False — silent logic error",
+      "example_bug": "if line.startswith('HTTP/'):  # always False when line is bytes"
+    },
+    {
+      "id": 7,
+      "group": 1,
+      "group_name": "Bytes/str separation",
+      "pattern": ".endswith(str) on bytes",
+      "grep_command": "grep -rn \"\\.endswith(\\\"\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "bytes.endswith(str) always returns False in Python 3 with no error. Silent logic failure.",
+      "python2_behavior": "data.endswith('\\r\\n') on str (bytes) returns True if data ends with CRLF",
+      "python3_behavior": "data.endswith('\\r\\n') on bytes always returns False — silent logic error",
+      "example_bug": "if response.endswith('\\r\\n'):  # always False when response is bytes"
+    },
+    {
+      "id": 8,
+      "group": 1,
+      "group_name": "Bytes/str separation",
+      "pattern": "bytes == str",
+      "grep_command": "grep -rn \"== \\\"\" <project>/ --include=\"*.py\" | grep -v test | head -20",
+      "description": "Comparing bytes to a str literal always returns False in Python 3 with no error. The most dangerous pattern — no crash, pure silent logic failure.",
+      "python2_behavior": "b'OK' == 'OK' is True — bytes and str were the same type",
+      "python3_behavior": "b'OK' == 'OK' is always False — different types, no TypeError, silent incorrect logic",
+      "example_bug": "if status == 'OK':  # always False when status is bytes from socket"
+    },
+
+    {
+      "id": 9,
+      "group": 2,
+      "group_name": "Removed or changed builtins",
+      "pattern": "has_key()",
+      "grep_command": "grep -rn \"has_key\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "dict.has_key() was removed in Python 3. Use 'key in dict' instead.",
+      "python2_behavior": "d.has_key('x') returns True if 'x' is a key — works",
+      "python3_behavior": "AttributeError: 'dict' object has no attribute 'has_key'",
+      "example_bug": "if headers.has_key('Content-Type'):  # AttributeError in Python 3"
+    },
+    {
+      "id": 10,
+      "group": 2,
+      "group_name": "Removed or changed builtins",
+      "pattern": "basestring",
+      "grep_command": "grep -rn \"basestring\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "basestring was the common base class of str and unicode in Python 2. Removed in Python 3.",
+      "python2_behavior": "isinstance(x, basestring) checks for any string type — works",
+      "python3_behavior": "NameError: name 'basestring' is not defined",
+      "example_bug": "if isinstance(val, basestring):  # NameError in Python 3"
+    },
+    {
+      "id": 11,
+      "group": 2,
+      "group_name": "Removed or changed builtins",
+      "pattern": "unicode()",
+      "grep_command": "grep -rn \"unicode(\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "unicode() builtin was removed in Python 3. str() is the unicode string type.",
+      "python2_behavior": "unicode(x) returns unicode string representation of x",
+      "python3_behavior": "NameError: name 'unicode' is not defined",
+      "example_bug": "url = unicode(url) if is_py2 else str(url)  # NameError if guard fails"
+    },
+    {
+      "id": 12,
+      "group": 2,
+      "group_name": "Removed or changed builtins",
+      "pattern": "xrange()",
+      "grep_command": "grep -rn \"xrange\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "xrange() was removed in Python 3. range() returns a lazy iterator in Python 3 equivalent to xrange().",
+      "python2_behavior": "xrange(n) returns a lazy iterator — memory efficient",
+      "python3_behavior": "NameError: name 'xrange' is not defined",
+      "example_bug": "for i in xrange(len(data)):  # NameError in Python 3"
+    },
+    {
+      "id": 13,
+      "group": 2,
+      "group_name": "Removed or changed builtins",
+      "pattern": "raw_input()",
+      "grep_command": "grep -rn \"raw_input\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "raw_input() was renamed to input() in Python 3. Python 2 input() evaluated the expression.",
+      "python2_behavior": "raw_input(prompt) reads a line from stdin as str",
+      "python3_behavior": "NameError: name 'raw_input' is not defined",
+      "example_bug": "answer = raw_input('Continue? ')  # NameError in Python 3"
+    },
+    {
+      "id": 14,
+      "group": 2,
+      "group_name": "Removed or changed builtins",
+      "pattern": "reduce()",
+      "grep_command": "grep -rn \"reduce(\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "reduce() was moved from builtins to functools in Python 3.",
+      "python2_behavior": "reduce(fn, iterable) works as a builtin",
+      "python3_behavior": "NameError: name 'reduce' is not defined (unless imported from functools)",
+      "example_bug": "total = reduce(lambda a, b: a + b, values)  # NameError in Python 3"
+    },
+    {
+      "id": 15,
+      "group": 2,
+      "group_name": "Removed or changed builtins",
+      "pattern": "filter() iterator",
+      "grep_command": "grep -rn \"filter(\" <project>/ --include=\"*.py\" | grep -v test | head -20",
+      "description": "filter() returns a list in Python 2 but a lazy iterator in Python 3. Code that indexes or slices the result breaks.",
+      "python2_behavior": "filter(fn, lst) returns a list — indexable, has len()",
+      "python3_behavior": "filter(fn, lst) returns a filter object — TypeError on indexing or len()",
+      "example_bug": "result = filter(None, items)[0]  # TypeError: 'filter' object is not subscriptable"
+    },
+    {
+      "id": 16,
+      "group": 2,
+      "group_name": "Removed or changed builtins",
+      "pattern": "map() iterator",
+      "grep_command": "grep -rn \"map(\" <project>/ --include=\"*.py\" | grep -v test | head -20",
+      "description": "map() returns a list in Python 2 but a lazy iterator in Python 3. Code that indexes or iterates twice breaks.",
+      "python2_behavior": "map(fn, lst) returns a list — reusable, indexable",
+      "python3_behavior": "map(fn, lst) returns a map object — exhausted after first iteration, TypeError on indexing",
+      "example_bug": "result = map(int, values); print(result[0])  # TypeError in Python 3"
+    },
+    {
+      "id": 17,
+      "group": 2,
+      "group_name": "Removed or changed builtins",
+      "pattern": "zip() iterator",
+      "grep_command": "grep -rn \"zip(\" <project>/ --include=\"*.py\" | grep -v test | head -20",
+      "description": "zip() returns a list of tuples in Python 2 but a lazy iterator in Python 3.",
+      "python2_behavior": "zip(a, b) returns a list of tuples — reusable",
+      "python3_behavior": "zip(a, b) returns a zip object — exhausted after first iteration",
+      "example_bug": "pairs = zip(keys, vals); len(pairs)  # TypeError: object of type 'zip' has no len()"
+    },
+    {
+      "id": 18,
+      "group": 2,
+      "group_name": "Removed or changed builtins",
+      "pattern": "dict.keys() view",
+      "grep_command": "grep -rn \"\\.keys()\" <project>/ --include=\"*.py\" | grep -v test | head -20",
+      "description": "dict.keys() returns a list in Python 2 but a view object in Python 3. Indexing a view raises TypeError.",
+      "python2_behavior": "d.keys() returns a list — indexable, sortable by default",
+      "python3_behavior": "d.keys() returns a dict_keys view — TypeError on indexing; use list(d.keys())",
+      "example_bug": "first_key = d.keys()[0]  # TypeError: 'dict_keys' object is not subscriptable"
+    },
+    {
+      "id": 19,
+      "group": 2,
+      "group_name": "Removed or changed builtins",
+      "pattern": "dict.values() view",
+      "grep_command": "grep -rn \"\\.values()\" <project>/ --include=\"*.py\" | grep -v test | head -20",
+      "description": "dict.values() returns a list in Python 2 but a view object in Python 3.",
+      "python2_behavior": "d.values() returns a list — indexable",
+      "python3_behavior": "d.values() returns a dict_values view — TypeError on indexing",
+      "example_bug": "vals = d.values(); vals.sort()  # AttributeError: 'dict_values' object has no attribute 'sort'"
+    },
+    {
+      "id": 20,
+      "group": 2,
+      "group_name": "Removed or changed builtins",
+      "pattern": "dict.items() view",
+      "grep_command": "grep -rn \"\\.items()\" <project>/ --include=\"*.py\" | grep -v test | head -20",
+      "description": "dict.items() returns a list of tuples in Python 2 but a view in Python 3.",
+      "python2_behavior": "d.items() returns a list of (key, value) tuples",
+      "python3_behavior": "d.items() returns a dict_items view — TypeError on indexing",
+      "example_bug": "first = d.items()[0]  # TypeError: 'dict_items' object is not subscriptable"
+    },
+
+    {
+      "id": 21,
+      "group": 3,
+      "group_name": "Integer arithmetic",
+      "pattern": "/ integer division",
+      "grep_command": "grep -rn \"[^/]/[^/]\" <project>/ --include=\"*.py\" | grep -v test | head -20",
+      "description": "The / operator performs integer division in Python 2 when both operands are int. In Python 3, / always returns float. Use // for integer division.",
+      "python2_behavior": "5 / 2 returns 2 (integer division)",
+      "python3_behavior": "5 / 2 returns 2.5 (float division) — logic errors in size/offset calculations",
+      "example_bug": "chunk_size = total / num_chunks  # returns float in Python 3, breaks array indexing"
+    },
+    {
+      "id": 22,
+      "group": 3,
+      "group_name": "Integer arithmetic",
+      "pattern": "sys.maxint",
+      "grep_command": "grep -rn \"sys\\.maxint\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "sys.maxint was removed in Python 3. Use sys.maxsize instead.",
+      "python2_behavior": "sys.maxint returns the maximum integer value for the platform",
+      "python3_behavior": "AttributeError: module 'sys' has no attribute 'maxint'",
+      "example_bug": "MAX = sys.maxint  # AttributeError in Python 3"
+    },
+
+    {
+      "id": 23,
+      "group": 4,
+      "group_name": "Exception handling",
+      "pattern": "raise Exception(fmt, arg)",
+      "grep_command": "grep -rn \"raise Exception.*,\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "In Python 2, raise Exception, 'message' was valid syntax. In Python 3 only raise Exception('message') is valid.",
+      "python2_behavior": "raise ValueError, 'bad value' raises ValueError with message",
+      "python3_behavior": "SyntaxError — comma syntax for raise was removed",
+      "example_bug": "raise ValueError, 'invalid input'  # SyntaxError in Python 3"
+    },
+    {
+      "id": 24,
+      "group": 4,
+      "group_name": "Exception handling",
+      "pattern": "except X, e:",
+      "grep_command": "grep -rn \"except.*,\" <project>/ --include=\"*.py\" | grep -v test | head -10",
+      "description": "Python 2 except clause used comma syntax. Python 3 requires 'as' keyword.",
+      "python2_behavior": "except ValueError, e: catches ValueError and binds to e",
+      "python3_behavior": "SyntaxError — use except ValueError as e: instead",
+      "example_bug": "except IOError, e:  # SyntaxError in Python 3"
+    },
+    {
+      "id": 25,
+      "group": 4,
+      "group_name": "Exception handling",
+      "pattern": "raise exc.with_traceback(tb)",
+      "grep_command": "grep -rn \"with_traceback\\|raise.*,.*,\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "Python 2 used 'raise ExcType, value, tb' to reraise with traceback. Python 3 uses exc.with_traceback(tb).",
+      "python2_behavior": "raise ExcType, value, traceback reraises preserving traceback",
+      "python3_behavior": "SyntaxError for old form; with_traceback() is the Python 3 idiom",
+      "example_bug": "raise exc_type, exc_value, exc_tb  # SyntaxError in Python 3"
+    },
+    {
+      "id": 26,
+      "group": 4,
+      "group_name": "Exception handling",
+      "pattern": "sys.exc_info() reraise",
+      "grep_command": "grep -rn \"sys\\.exc_info\\|exc_info\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "Exception chaining and reraise idioms changed between Python 2 and 3. Python 3 uses implicit exception chaining.",
+      "python2_behavior": "exc_info = sys.exc_info(); raise exc_info[0], exc_info[1], exc_info[2]",
+      "python3_behavior": "SyntaxError for three-argument raise; use 'raise' bare or 'raise X from Y'",
+      "example_bug": "t, v, tb = sys.exc_info(); raise t, v, tb  # SyntaxError in Python 3"
+    },
+
+    {
+      "id": 27,
+      "group": 5,
+      "group_name": "Import renames",
+      "pattern": "import urllib2",
+      "grep_command": "grep -rn \"import urllib2\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "urllib2 was reorganized into urllib.request and urllib.error in Python 3.",
+      "python2_behavior": "import urllib2; urllib2.urlopen() works",
+      "python3_behavior": "ImportError: No module named 'urllib2'",
+      "example_bug": "import urllib2; response = urllib2.urlopen(url)  # ImportError in Python 3"
+    },
+    {
+      "id": 28,
+      "group": 5,
+      "group_name": "Import renames",
+      "pattern": "import httplib",
+      "grep_command": "grep -rn \"import httplib\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "httplib was renamed to http.client in Python 3.",
+      "python2_behavior": "import httplib; httplib.HTTPConnection works",
+      "python3_behavior": "ImportError: No module named 'httplib'",
+      "example_bug": "import httplib; conn = httplib.HTTPConnection(host)  # ImportError in Python 3"
+    },
+    {
+      "id": 29,
+      "group": 5,
+      "group_name": "Import renames",
+      "pattern": "import cookielib",
+      "grep_command": "grep -rn \"import cookielib\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "cookielib was renamed to http.cookiejar in Python 3.",
+      "python2_behavior": "import cookielib; cookielib.CookieJar() works",
+      "python3_behavior": "ImportError: No module named 'cookielib'",
+      "example_bug": "import cookielib; jar = cookielib.CookieJar()  # ImportError in Python 3"
+    },
+    {
+      "id": 30,
+      "group": 5,
+      "group_name": "Import renames",
+      "pattern": "import StringIO",
+      "grep_command": "grep -rn \"import StringIO\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "StringIO module was merged into io in Python 3. StringIO.StringIO becomes io.StringIO.",
+      "python2_behavior": "from StringIO import StringIO works",
+      "python3_behavior": "ImportError: No module named 'StringIO'; use from io import StringIO",
+      "example_bug": "from StringIO import StringIO  # ImportError in Python 3"
+    },
+    {
+      "id": 31,
+      "group": 5,
+      "group_name": "Import renames",
+      "pattern": "import cPickle",
+      "grep_command": "grep -rn \"import cPickle\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "cPickle was merged into pickle in Python 3 (C implementation is automatic).",
+      "python2_behavior": "import cPickle; cPickle.loads() uses fast C implementation",
+      "python3_behavior": "ImportError: No module named 'cPickle'; use pickle directly",
+      "example_bug": "import cPickle as pickle  # ImportError in Python 3"
+    },
+    {
+      "id": 32,
+      "group": 5,
+      "group_name": "Import renames",
+      "pattern": "import ConfigParser",
+      "grep_command": "grep -rn \"import ConfigParser\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "ConfigParser was renamed to configparser (lowercase) in Python 3.",
+      "python2_behavior": "import ConfigParser; ConfigParser.SafeConfigParser() works",
+      "python3_behavior": "ImportError: No module named 'ConfigParser'",
+      "example_bug": "import ConfigParser; cfg = ConfigParser.ConfigParser()  # ImportError in Python 3"
+    },
+    {
+      "id": 33,
+      "group": 5,
+      "group_name": "Import renames",
+      "pattern": "import HTMLParser",
+      "grep_command": "grep -rn \"import HTMLParser\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "HTMLParser was moved to html.parser in Python 3.",
+      "python2_behavior": "import HTMLParser; HTMLParser.HTMLParser() works",
+      "python3_behavior": "ImportError: No module named 'HTMLParser'",
+      "example_bug": "import HTMLParser; parser = HTMLParser.HTMLParser()  # ImportError in Python 3"
+    },
+    {
+      "id": 34,
+      "group": 5,
+      "group_name": "Import renames",
+      "pattern": "from __future__",
+      "grep_command": "grep -rn \"from __future__\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "Informational pattern. Presence of __future__ imports signals the file was written for dual Python 2/3 compatibility and may contain compat shims worth inspecting.",
+      "python2_behavior": "from __future__ import print_function, division etc. opt into Python 3 behavior",
+      "python3_behavior": "__future__ imports are no-ops in Python 3 — but their presence marks dual-version code",
+      "example_bug": "Informational only — inspect surrounding code for compat shims that may have been incompletely removed"
+    },
+
+    {
+      "id": 35,
+      "group": 6,
+      "group_name": "String encoding",
+      "pattern": ".encode() no explicit encoding",
+      "grep_command": "grep -rn \"\\.encode()\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "str.encode() with no argument uses the default encoding. In Python 2 the default was ASCII. In Python 3 the default is UTF-8. If the string contains characters in range 128-255, behavior differs.",
+      "python2_behavior": "s.encode() uses ASCII by default — raises UnicodeDecodeError on non-ASCII",
+      "python3_behavior": "s.encode() uses UTF-8 by default — silently produces different bytes for non-ASCII",
+      "example_bug": "key = username.encode()  # produces different bytes for non-ASCII usernames"
+    },
+    {
+      "id": 36,
+      "group": 6,
+      "group_name": "String encoding",
+      "pattern": ".decode() no error handler",
+      "grep_command": "grep -rn \"\\.decode()\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "bytes.decode() with no encoding argument uses UTF-8. If bytes contain non-UTF-8 sequences (e.g., latin-1 data), raises UnicodeDecodeError. In Python 2 no decode was needed.",
+      "python2_behavior": "No decode needed — str and bytes were the same type",
+      "python3_behavior": "bytes.decode() raises UnicodeDecodeError if content is not valid UTF-8",
+      "example_bug": "text = data.decode()  # UnicodeDecodeError if data contains latin-1 bytes"
+    },
+    {
+      "id": 37,
+      "group": 6,
+      "group_name": "String encoding",
+      "pattern": "str() on bytes",
+      "grep_command": "grep -rn \"str(\" <project>/ --include=\"*.py\" | grep -v test | head -20",
+      "description": "str(b'hello') in Python 2 returns 'hello'. In Python 3, str(b'hello') returns \"b'hello'\" — the repr, not the content.",
+      "python2_behavior": "str(b'data') returns 'data' — the content",
+      "python3_behavior": "str(b'data') returns \"b'data'\" — the repr, with b-prefix and quotes included",
+      "example_bug": "label = str(response_bytes)  # produces \"b'...'\" string in Python 3"
+    },
+    {
+      "id": 38,
+      "group": 6,
+      "group_name": "String encoding",
+      "pattern": "% formatting on bytes",
+      "grep_command": "grep -rn \"b\\\".*%\\|b'.*%\" <project>/ --include=\"*.py\" | grep -v test",
+      "description": "% string formatting on bytes objects raises TypeError in Python 3. In Python 2, str was bytes so % formatting worked.",
+      "python2_behavior": "b'Hello %s' % name works — str and bytes were the same",
+      "python3_behavior": "TypeError: %b requires a bytes-like object, or object that implements __bytes__, not 'str'",
+      "example_bug": "msg = b'Error: %s' % error_text  # TypeError in Python 3"
+    },
+
+    {
+      "id": 39,
+      "group": 7,
+      "group_name": "Silent comparison failures",
+      "pattern": "bytes == str literal",
+      "grep_command": "grep -rn \"== \\\"\" <project>/ --include=\"*.py\" | grep -v test | head -20",
+      "description": "Comparing a bytes variable to a str literal always returns False in Python 3 without raising any error. Most dangerous pattern — undetectable by any linter.",
+      "python2_behavior": "b'OK' == 'OK' is True — bytes and str were interchangeable",
+      "python3_behavior": "b'OK' == 'OK' is False — always, silently, with no warning or exception",
+      "example_bug": "if response_code == 'OK': proceed()  # never executes when response_code is bytes"
+    },
+    {
+      "id": 40,
+      "group": 7,
+      "group_name": "Silent comparison failures",
+      "pattern": "bytes != str literal",
+      "grep_command": "grep -rn \"!= \\\"\" <project>/ --include=\"*.py\" | grep -v test | head -20",
+      "description": "Comparing bytes to str with != always returns True in Python 3. Any guard using != to check bytes content silently passes when it should not.",
+      "python2_behavior": "b'ERROR' != 'OK' is True — correct inequality check",
+      "python3_behavior": "b'ERROR' != 'OK' is always True — even b'OK' != 'OK' is True, bypassing all equality guards",
+      "example_bug": "if status != 'error': continue  # always continues, never catches error when status is bytes"
+    }
+
+  ]
+}

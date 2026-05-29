@@ -1,5 +1,5 @@
 {
-  "methodology": "GiPH/PRISM Migration Bug Detection",
+  "methodology": "Migration Bug Detection",
   "total_patterns": 40,
   "groups": 7,
   "patterns": [

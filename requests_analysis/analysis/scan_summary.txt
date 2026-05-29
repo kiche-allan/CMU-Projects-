@@ -1,0 +1,41 @@
+REQUESTS DATA FLOW SCAN SUMMARY
+=================================
+py2 codebase: v2.27.1-16 @ 79f60274 (one commit before Farewell Concorde)
+py3 codebase: v2.34.2-1 @ cd90742e (current HEAD)
+Migration point: 8bce583b - Farewell sweet Concorde (Mar 2022)
+
+VERDICT: CLEAN — No Python 2 to 3 migration bugs found
+
+METHODOLOGY APPLIED
+- Step 1: Binary data origins — raw.read(), fp.read(), struct.unpack (utils.py)
+- Step 2: Extended pattern scan — decode(), latin-1, chardet, to_native_string
+- Step 3: py2 vs py3 comparison — is_py2, basestring, unicode(), builtin_str
+
+TARGETS INVESTIGATED
+1. models.py:1105 json() body decoding
+   - guess_json_utf + errors='replace' fallback — intentional lossy design
+   - UnicodeDecodeError on wrong encoding silently swallowed — by design
+   - is_py2/e.message branch correctly removed in py3
+   - VERDICT: CLEAN — intentional design, not a migration bug
+
+2. models.py:1147-1152 raise_for_status iso-8859-1 fallback
+   - Try UTF-8, fall back to iso-8859-1 on HTTP reason phrase
+   - Identical in py2 and py3 — not a migration change
+   - RFC 2616 compliant — iso-8859-1 is HTTP/1.1 default charset
+   - Different from pandas/DRF anti-pattern — this is spec-mandated
+   - VERDICT: CLEAN — RFC-compliant, pre-existing, not a migration change
+
+3. _internal_utils.py to_native_string() ascii default
+   - py2 encode() → py3 decode() correctly inverted
+   - ascii default raises on non-ASCII bytes — models.py:547 is riskiest site
+   - Identical risk in py2 and py3 — not a migration change
+   - VERDICT: CLEAN — pre-existing, not a migration bug
+
+MIGRATION QUALITY
+- compat.py: is_py2/basestring/unicode() fully removed from production paths
+- to_native_string: py2→py3 direction correctly inverted
+- iso-8859-1 in raise_for_status: RFC-compliant, not the anti-pattern
+- latin-1 in auth.py: RFC 7617 mandated — correct
+- No bare except: anywhere in production code
+- No bytes/str type boundary crossing found
+- charset detection path (chardet) uses errors='replace' — intentional

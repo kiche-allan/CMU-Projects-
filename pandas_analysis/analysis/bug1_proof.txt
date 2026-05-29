@@ -1,0 +1,171 @@
+﻿C:\Python314\python.exe : Could not find platform independent libraries <prefix>
+At line:1 char:61
++ ... _codebase"; C:\Python314\python.exe "..\analysis\test_bug1.py" 2>&1 | ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Could not find ...raries <prefix>:Strin 
+   g) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+========================================================================
+SECTION 1 — Basic behavior: bytes valid in latin-1 but invalid in UTF-8
+========================================================================
+
+Input bytes : b'\xe9'  (b'\xe9'       — lone high byte (é in latin-1))
+Intent      : latin-1 'é' (U+00E9) — ambiguous, could be correct
+Buggy result: 'é'  (UnicodeWarning issued: True)
+UTF-8 valid : False  |  latin-1 decode succeeds silently: True
+
+Input bytes : b'\xc3'  (b'\xc3'       — truncated UTF-8 lead byte (Ã in latin-1))
+Intent      : Ã in latin-1 — probably wrong, file had a truncated UTF-8 sequence
+Buggy result: 'Ã'  (UnicodeWarning issued: True)
+UTF-8 valid : False  |  latin-1 decode succeeds silently: True
+
+Input bytes : b'\xc3'  (b'\xc3\xa9'[:-1] — UTF-8 'é' with continuation byte stripped)
+Intent      : truncated UTF-8; correct value would be 'é' (U+00E9)
+Buggy result: 'Ã'  (UnicodeWarning issued: True)
+UTF-8 valid : False  |  latin-1 decode succeeds silently: True
+
+Input bytes : b'\x80\x81'  (b'\x80\x81'   — C1 control range, valid latin-1, invalid UTF-8)
+Intent      : latin-1 PAD/HOP control chars — data corruption territory
+Buggy result: '\x80\x81'  (UnicodeWarning issued: True)
+UTF-8 valid : False  |  latin-1 decode succeeds silently: True
+
+Input bytes : b'caf\xe9'  (b'caf\xe9'    — 'café' encoded in latin-1, file claims UTF-8)
+Intent      : intended to be UTF-8 'café' (b'caf\xc3\xa9') but stored as latin-1
+Buggy result: 'café'  (UnicodeWarning issued: True)
+UTF-8 valid : False  |  latin-1 decode succeeds silently: True
+
+========================================================================
+SECTION 2 — Minimal fake Stata 118 (UTF-8) file with mis-encoded strings
+========================================================================
+
+Simulated Stata format version : 118
+Encoding set by _set_encoding() : 'utf-8'
+Variable name bytes from file:
+  raw=b'income'                  =>  decoded='income'      (warning=no)
+  raw=b'r\xe9gion'               =>  decoded='région'      (warning=YES [!])
+  raw=b'pr\xebt'                 =>  decoded='prët'        (warning=YES [!])
+  raw=b'na\xefve'                =>  decoded='naïve'       (warning=YES [!])
+
+Resulting DataFrame columns: ['income', 'région', 'prët', 'naïve']
+
+The user sees columns named income, région, prêt, naïve — no exception.
+Whether these are correct depends entirely on whether the original file
+intended latin-1.  If the file was corrupted UTF-8, these are wrong names.
+
+========================================================================
+SECTION 3 — Warning suppression: the UnicodeWarning is easily silenced
+========================================================================
+
+Case A — warnings enabled (default in interactive sessions):
+  Result   : 'région'
+  Warnings : ['\nOne or more strings in the dta file could not be decoded using utf-8, and\nso the fallback encoding of latin-1 is being used.  This can happen when a file\nhas been incorrectly encoded by Stata or some other software. You should verify\nthe string values returned are correct.']
+
+Case B — UnicodeWarning filtered (common in production / logging setups):
+  Result   : 'région'
+  Warnings : []  ← empty list, caller gets no signal at all
+
+Case C — warnings.simplefilter('error') would catch it, but nobody does that:
+  Raised UnicodeWarning: 
+One or more strings in the dta file could not be decoded us...
+  Only reachable if the caller explicitly turns warnings into errors.
+
+========================================================================
+SECTION 4 — latin-1 never fails: accepts all 256 byte values
+========================================================================
+
+  All 256 byte values (0x00–0xff) decode successfully as latin-1.
+  latin-1 is a complete 256-codepoint bijection onto bytes — it CANNOT fail.
+  This is why the fallback always 'succeeds': it accepts anything,
+  including corrupted data, garbage, or partial multi-byte sequences.
+
+  Single-byte UTF-8 decode failures: 128/256 byte values
+  (bytes 0x80–0xbf are continuation bytes, 0xc0–0xc1/0xf5–0xff are invalid)
+
+  When a latin-1 fallback is used, those 128 values that would
+  have raised an error instead silently return latin-1 characters.
+
+========================================================================
+SECTION 5 — py2 comparison: no _decode() wrapper existed in py2 stata.py
+========================================================================
+
+In pandas py2 (v0.24.2 / stata.py), there is no _decode() method.
+grep for '_decode|latin|UnicodeDecodeError|fallback' in py2 stata.py → No matches.
+
+The py2 StataReader:
+  - Set self._encoding = None initially (line 974)
+  - _set_encoding() set 'latin-1' for format < 118, 'utf-8' for >= 118  (same logic)
+  - String fields were decoded inline, without a try/except wrapper
+  - On UnicodeDecodeError the exception propagated — caller saw the crash
+
+Simulating py2 behavior (inline decode, no fallback):
+
+  Input : b'income'  (clean ASCII — succeeds in both)
+  py2   : OK → 'income'
+  py3   : silent → 'income' (warned=False)
+
+  Input : b'r\xe9gion'  (latin-1 bytes in UTF-8 file — py2 raises, py3 silently wrong)
+  py2   : UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe9 in position 1: invalid continuation byte
+  py3   : silent → 'région' (warned=True)
+
+  Input : b'caf\xe9'  (latin-1 bytes in UTF-8 file — py2 raises, py3 silently wrong)
+  py2   : UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe9 in position 3: unexpected end of data
+  py3   : silent → 'café' (warned=True)
+
+py2 raised a hard error.  The py3 'fix' (GH #25960) traded a noisy
+crash for a quiet wrong answer — the opposite of what a safe migration
+should do.
+
+========================================================================
+SECTION 6 — Proposed fix: propagate UnicodeDecodeError with context
+========================================================================
+
+Fixed _decode() — raise with actionable message instead of silent substitution:
+
+    def _decode(self, s: bytes) -> str:
+        s = s.partition(b"\0")[0]
+        try:
+            return s.decode(self._encoding)
+        except UnicodeDecodeError as err:
+            raise UnicodeDecodeError(
+                err.encoding,
+                err.object,
+                err.start,
+                err.end,
+                f"Stata file string could not be decoded as {self._encoding}. "
+                f"Re-open with encoding='latin-1' if this is a legacy file "
+                f"(GH 25960). Original error: {err.reason}",
+            ) from err
+
+Demonstrating fixed behavior:
+  _decode_fixed(b'income', 'utf-8') → 'income'  (clean — no change)
+  _decode_fixed(b'r\xe9gion', 'utf-8') → UnicodeDecodeError raised  (invalid UTF-8 bytes — now raises with guidance)
+    'utf-8' codec can't decode byte 0xe9 in position 1: invalid continuation byte
+  _decode_fixed(b'r\xe9gion', 'latin-1') → 'région'  (same bytes with correct encoding — success)
+
+========================================================================
+CONCLUSION
+========================================================================
+
+Bug:   _decode() catches UnicodeDecodeError and retries with latin-1.
+       latin-1 never raises — so every byte sequence silently 'succeeds'.
+       The caller receives potentially wrong strings with only a suppressible
+       UnicodeWarning as notification.
+
+Root cause:  GH #25960 traded a hard error (py2 behavior) for a silent wrong
+             answer to accommodate files mis-converted by Stata itself.  The
+             warning is not visible in production environments where warnings
+             are filtered (logging frameworks, -W ignore, pytest -p no:warnings).
+
+Scope:  Affects every string field in the file:
+          _get_varlist()        → column names
+          _get_variable_labels() → variable labels
+          _get_data_label()     → dataset label
+          _read_new_value_labels() → category string values
+        All 12+ call sites pass through _decode().
+
+Fix:   Raise UnicodeDecodeError with an actionable message pointing the user
+       to the encoding= parameter.  Let the caller decide, not the library.
+
+Python version: 3.14.5 (tags/v3.14.5:5607950, May 10 2026, 10:43:50) [MSC v.1944 64 bit (AMD64)]
+

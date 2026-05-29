@@ -1,0 +1,37 @@
+PARAMIKO DATA FLOW SCAN SUMMARY
+=================================
+py2 codebase: 2.12.0-16 @ 4495c405 (one commit before PY2 removal)
+py3 codebase: 5.0.0-1 @ d60d5c17 (current HEAD)
+Migration point: 74eae059 - Remove py3compat.PY2 (Jan 2023)
+
+VERDICT: CLEAN — No Python 2 to 3 migration bugs found
+
+METHODOLOGY APPLIED
+- Step 1: Binary data origins — socket.recv, struct.unpack, open(rb), pkey
+- Step 2: Extended pattern scan — decode(), ord(), byte_ord, isinstance, latin-1
+- Step 3: py2 vs py3 comparison — py3compat, long, PY2, xrange, string_types
+
+TARGETS INVESTIGATED
+1. util.py long/PY2/xrange (lines 39-289)
+   - py3 codebase: fully replaced with int(), range() — CLEAN
+   - py2 snapshot: mid-migration, import-broken (py3compat deleted but 20 import sites remain)
+   - VERDICT: CLEAN in py3
+
+2. byte_ord() dead branch in common.py:40-44
+   - ord() path dead for all bytes[i] callers in py3 (bytes[i] returns int)
+   - Still reachable via transport.py:1159 os.urandom(1) — no crash
+   - VERDICT: DEAD CODE, not a bug
+
+3. pkey.py:840 bare .decode()
+   - PEM output from cryptography library is always ASCII
+   - UTF-8 default decode is safe by construction
+   - Identical in py2 and py3 — no behavioral change
+   - VERDICT: SAFE
+
+MIGRATION QUALITY
+- py3compat module: properly dissolved into util.py and common.py
+- b()/u() helpers: remain but work correctly with explicit UTF-8 default
+- byte_ord() shim: harmless dead code — bytes[i] returns int in py3
+- latin-1 fallback anti-pattern: NOT PRESENT
+- No bytes/str type boundary crossing found in any code path
+- SSH binary protocol handled correctly through entire packet.py path

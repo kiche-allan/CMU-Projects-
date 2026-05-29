@@ -1,0 +1,176 @@
+﻿C:\Python314\python.exe : Could not find platform independent libraries <prefix>
+At line:1 char:58
++ ... _codebase"; C:\Python314\python.exe "..\analysis\test_bug1.py" 2>&1 | ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Could not find ...raries <prefix>:Strin 
+   g) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+========================================================================
+SECTION 1 -- Verbatim DRF code at authentication.py lines 76-85
+========================================================================
+
+    # --- py3 (current, buggy) ---
+    try:
+        auth_decoded = base64.b64decode(auth[1]).decode('utf-8')     # line 78
+    except UnicodeDecodeError:
+        auth_decoded = base64.b64decode(auth[1]).decode('latin-1')   # line 80
+
+    userid, password = auth_decoded.split(':', 1)                    # line 82
+
+
+    # --- py2 (DRF 3.9.3, authentication.py:79-83) ---
+    HTTP_HEADER_ENCODING = 'iso-8859-1'           # rest_framework/__init__.py:20
+    try:
+        auth_parts = base64.b64decode(auth[1]).decode(HTTP_HEADER_ENCODING)
+    except (TypeError, UnicodeDecodeError, binascii.Error):
+        raise AuthenticationFailed(...)           # propagates -- no fallback
+
+    userid, password = auth_parts[0], auth_parts[2]
+
+Key difference:
+  py2 -- single unconditional decode with iso-8859-1. Consistent, deterministic.
+  py3 -- try UTF-8, silently fall back to latin-1.  Non-deterministic for
+         non-ASCII credentials. Identical bytes produce different strings
+         depending on whether they happen to be valid UTF-8.
+
+========================================================================
+SECTION 2 -- Credential where UTF-8 fails and latin-1 silently succeeds
+========================================================================
+
+Raw credential bytes  : b'admin:caf\xe9'
+Base64 token          : b'YWRtaW46Y2Fm6Q=='
+Direct UTF-8 decode   : FAILS -- 'utf-8' codec can't decode byte 0xe9 in position 9: unexpected end of data
+
+py3 buggy result:
+  userid   = 'admin'
+  password = 'café'  (came from latin-1 fallback -- no error raised)
+  Django authenticate() is called with these values silently
+
+========================================================================
+SECTION 3 -- py2 iso-8859-1 vs py3 UTF-8 fallback: same bytes, compare results
+========================================================================
+
+Credential bytes                    py2 (iso-8859-1)       py3 (utf-8+fallback)   Match?
+------------------------------------------------------------------------
+  b'admin:password'                   'admin':'password'     'admin':'password'     SAME
+  b'admin:caf\xe9'                    'admin':'café'         'admin':'café'         SAME
+  b'admin:caf\xc3\xa9'                'admin':'cafÃ©'        'admin':'café'         DIFFERENT !
+  b'jos\xe9:secret'                   'josé':'secret'        'josé':'secret'        SAME
+  b'r\xe9sum\xe9:pass\xf6'            'résumé':'passö'       'résumé':'passö'       SAME
+
+Explanation of DIFFERENT rows:
+  py2 treats ALL bytes as iso-8859-1 -- each byte maps to one latin-1 char.
+  py3 tries UTF-8 first. For valid UTF-8 multi-byte sequences (0xc3 0xa9),
+  py3 decodes them as a SINGLE unicode char (e-acute U+00E9).
+  py2 would see 0xc3 0xa9 as TWO latin-1 chars (U+00C3 U+00A9 = A-tilde + copyright).
+  A password set under py3 ('caf' + e-acute) may never authenticate under py2,
+  and a password hash stored under py2 conventions may never match under py3.
+
+========================================================================
+SECTION 4 -- Security: two different byte sequences decode to the same credential
+========================================================================
+
+Scenario: user 'admin' sets password as unicode e-acute (U+00E9).
+  Django stores the hashed unicode string in its auth backend.
+
+Client A sends latin-1 encoded credential (1 byte, 0xe9):
+  Raw bytes : b'admin:caf\xe9'
+  Token     : b'YWRtaW46Y2Fm6Q=='
+  Decoded   : userid='admin'  password='café'  (latin-1 fallback path)
+
+Client B sends UTF-8 encoded credential (2 bytes, 0xc3 0xa9):
+  Raw bytes : b'admin:caf\xc3\xa9'
+  Token     : b'YWRtaW46Y2Fmw6k='
+  Decoded   : userid='admin'  password='café'  (direct UTF-8 path)
+
+Both credentials decode to the same password string: 'café' == 'café' => True
+
+Result: two structurally DIFFERENT byte sequences in the Authorization header
+        both authenticate as the same user.  DRF accepts both representations.
+        A client that 'shouldn't' work (legacy, misconfigured, or attacker)
+        using latin-1 encoding will authenticate if the unicode password matches.
+
+Token A : b'YWRtaW46Y2Fm6Q=='
+Token B : b'YWRtaW46Y2Fmw6k='
+Tokens are identical: False
+Two distinct Authorization headers => both authenticate => non-deterministic boundary.
+
+========================================================================
+SECTION 5 -- latin-1 never fails: accepts all 256 byte values
+========================================================================
+
+  latin-1 failures decoding single bytes 0x00-0xff : 0/256
+  UTF-8   failures decoding single bytes 0x00-0xff : 128/256
+
+  latin-1 is a complete bijection over all 256 byte values.
+  The except branch therefore ALWAYS succeeds -- it is an unconditional catch-all.
+  Every byte pattern that fails UTF-8 will silently produce a latin-1 string.
+  That is 128 out of 256 possible byte values that silently bypass
+  the encoding check and reach Django's authenticate().
+
+========================================================================
+SECTION 6 -- Proposed fix: strict UTF-8, raise AuthenticationFailed on failure
+========================================================================
+
+Fixed implementation:
+
+    def authenticate(self, request):
+        ...
+        try:
+            auth_decoded = base64.b64decode(auth[1]).decode('utf-8')  # strict
+        except (UnicodeDecodeError, binascii.Error):
+            msg = _('Invalid basic header. Credentials must be UTF-8 encoded.')
+            raise exceptions.AuthenticationFailed(msg)
+
+        userid, password = auth_decoded.split(':', 1)
+        ...
+
+Why this is correct:
+  RFC 7617 (2015) mandates UTF-8 for Basic Auth credentials.
+  The py2 iso-8859-1 path was a legacy accommodation; it was NOT a security
+  feature.  The py3 fallback silently accepts legacy clients that send
+  non-UTF-8 bytes, masking misconfigured or potentially hostile clients.
+  Raising instead means the client gets a 401 with a clear error message
+  and must fix its encoding -- which is the correct outcome.
+
+Demonstrating fixed behavior:
+  [pass] b'admin:password'                    OK  => userid='admin'  password='password'
+  [pass] b'admin:caf\xc3\xa9'                 OK  => userid='admin'  password='café'
+  [fail] b'admin:caf\xe9'                     AuthenticationFailed raised => Invalid basic header. Credentials contain non-UTF-8 bytes. E
+  [fail] b'r\xe9sum\xe9:pass'                 AuthenticationFailed raised => Invalid basic header. Credentials contain non-UTF-8 bytes. E
+  [pass] b'admin:\x00secret'                  OK  => userid='admin'  password='\x00secret'
+
+========================================================================
+CONCLUSION
+========================================================================
+
+Bug:   BasicAuthentication decodes credentials as UTF-8 then falls back to
+       latin-1 on UnicodeDecodeError.  latin-1 never raises, so all
+       128 single-byte values that fail UTF-8 silently produce
+       latin-1 strings that are passed to Django authenticate().
+
+Effects:
+  1. Non-determinism: same logical password encoded as latin-1 vs UTF-8
+     produces the same unicode string under py3, meaning two different
+     Authorization header values authenticate as the same user.
+
+  2. py2/py3 behavioral divergence: a password set under py3 containing
+     a properly UTF-8-encoded non-ASCII char (e.g. 0xc3 0xa9 for e-acute)
+     would have decoded as TWO latin-1 characters under py2 (U+00C3, U+00A9).
+     The py2->py3 migration silently changed which credentials are accepted.
+
+  3. No signal: no exception, no warning, no log entry when the fallback
+     fires.  Operations teams cannot detect that non-UTF-8 credentials are
+     being accepted.
+
+Root cause: py3 migration changed the unconditional iso-8859-1 decode
+     (py2, consistent) to a try/except (py3, non-deterministic) without
+     documenting the behavior change or adding observability.
+
+Fix:  Decode strictly as UTF-8 per RFC 7617.  Raise AuthenticationFailed
+     with a clear message if decoding fails.  Let the client fix its
+     encoding rather than silently guessing.
+
+Python version: 3.14.5 (tags/v3.14.5:5607950, May 10 2026, 10:43:50) [MSC v.1944 64 bit (AMD64)]
+

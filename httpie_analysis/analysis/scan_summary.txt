@@ -1,0 +1,42 @@
+HTTPIE SCAN SUMMARY
+=================================
+Repository: httpie/cli
+Investigated: May 2026
+Researcher: Allan Kiche — GiPH/PRISM Research, Carnegie Mellon University
+
+VERDICT: DISQUALIFIED — No meaningful Python 2 code-level migration found
+
+REASON
+Although httpie formally dropped Python 2 support in version 3.0.0
+(commits b3d2c18, 464b5b4), investigation of the py2_codebase at tag
+2.6.0 found zero code-level Python 2 shims:
+
+  grep for: six, PY2, string_types, text_type, binary_type, basestring
+  Result: ZERO hits in any production file
+
+The Python 2 removal commits were CI configuration and setup.py
+classifier cleanup only — not code rewrites. The compat.py at 2.6.0
+contains only a cached_property backport for Python <3.8, not any
+bytes/str compatibility code.
+
+The actual code-level migration to Python 3 happened before version
+1.0.0 — too early in the project history to extract a meaningful
+py2_codebase snapshot for comparison.
+
+SELECTION CRITERIA FAILED
+- Confirmed Python 2 history in production code: FAIL — code was
+  already Python 3 native at the earliest inspectable tag (2.6.0)
+- Active Python 3 maintenance: PASS
+- Binary data handling: PASS (file uploads, subprocess, header decoding)
+- Sufficient size: PASS
+
+MIGRATION COMMITS INVESTIGATED
+- b3d2c18 — Python 2.7 support removal WIP
+- 464b5b4 — Polish Python 2 removal (#1070)
+- 2.6.0 tag — last release before formal py2 removal
+- 3.0.0 tag — first py3-only release
+
+FINDING
+latin-1 in plugins/builtin.py lines 27 and 33 is RFC 7617 compliant
+Basic Auth credential encoding — same pattern as requests auth.py,
+correctly excluded as a false positive.

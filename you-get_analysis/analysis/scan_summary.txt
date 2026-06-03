@@ -1,0 +1,34 @@
+YOU-GET SCAN SUMMARY
+=================================
+Repository: soimort/you-get
+Investigated: May 2026
+Researcher: Allan Kiche — GiPH/PRISM Research, Carnegie Mellon University
+
+VERDICT: DISQUALIFIED — Does not meet codebase selection criteria
+
+REASON
+you-get was Python 3 native from its first commit (August 2012).
+The initial commit already uses:
+  from urllib import request, parse  — pure Python 3 syntax
+  urllib.request, urllib.parse       — Python 3 stdlib layout
+
+The 0.2.x / 0.3.x / 0.4.x versioning refers to the project's own
+semantic versioning, not Python version compatibility. There was never
+a Python 2 era in this codebase.
+
+SELECTION CRITERIA FAILED
+- Confirmed Python 2 history: FAIL — Python 3 native from day one
+- Active Python 3 maintenance: PASS
+- Binary data handling: PASS
+- Sufficient size: PASS
+
+IMPLICATION
+No py2_codebase can be extracted. No py2 vs py3 behavioral comparison
+is possible. The data flow methodology requires two snapshots to
+confirm that a bug is a migration artifact rather than a pre-existing
+error. Without a py2 snapshot this confirmation is impossible.
+
+COMMITS CHECKED
+- Initial commit: 146bae2 (August 2012) — urllib.request already present
+- version 0.2.13: 7984890 — still Python 3 native
+- version 0.3.0: d42032e — still Python 3 native

@@ -602,12 +602,12 @@ def scan(py3_path: str, py2_path: str, project_name: str) -> ScanResult:
     if confirmed:
         print(f"\n  Confirmed bugs:")
         for b in confirmed:
-            print(f"    [{b['group_name']}] {b['file']}:{b['line']} — {b['pattern_name']}")
+            print(f"    [{b.group_name}] {b.file}:{b.line} — {b.pattern_name}")
 
     if candidates:
         print(f"\n  Candidates requiring manual investigation:")
         for c in candidates:
-            print(f"    [{c['group_name']}] {c['file']}:{c['line']} — {c['pattern_name']}")
+            print(f"    [{c.group_name}] {c.file}:{c.line} — {c.pattern_name}")
 
     return result
 

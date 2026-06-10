@@ -1,4 +1,4 @@
-#  Migration Bug Scanner
+﻿#  Migration Bug Scanner
 ## Python 2 → Python 3 Migration Bug Detection Tool
 
 ### What This Does

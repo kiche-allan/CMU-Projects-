@@ -1,4 +1,4 @@
-Migration Bug Detection Methodology
+﻿Migration Bug Detection Methodology
 May 2026
 
 1. Research Motivation

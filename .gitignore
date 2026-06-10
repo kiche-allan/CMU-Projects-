@@ -1,8 +1,40 @@
-# Python artifacts
+# Exclude full cloned codebases — too large for GitHub
+mitmproxy_analysis/py2_codebase/
+mitmproxy_analysis/py3_codebase/
+sqlmap_analysis/py2_codebase/
+sqlmap_analysis/py3_codebase/
+ocrmypdf_analysis/py2_codebase/
+ocrmypdf_analysis/py3_codebase/
+scrapy_analysis/py2_codebase/
+scrapy_analysis/py3_codebase/
+numpy_analysis/py2_codebase/
+numpy_analysis/py3_codebase/
+pandas_analysis/py2_codebase/
+pandas_analysis/py3_codebase/
+drf_analysis/py2_codebase/
+drf_analysis/py3_codebase/
+celery_analysis/py2_codebase/
+celery_analysis/py3_codebase/
+paramiko_analysis/py2_codebase/
+paramiko_analysis/py3_codebase/
+requests_analysis/py2_codebase/
+requests_analysis/py3_codebase/
+httpie_analysis/py2_codebase/
+httpie_analysis/py3_codebase/
+
+# Python cache
 __pycache__/
-*.py[cod]
-*.egg-info/
+*.pyc
+*.pyo
 .env
+*.egg-info/
+*.py[cod]
 .venv/
 dist/
 build/
+
+# Keep analysis folders and scan summaries
+!*/analysis/
+!*/analysis/*.txt
+!*/analysis/*.py
+!*/analysis/*.json

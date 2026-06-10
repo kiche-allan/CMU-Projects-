@@ -1,5 +1,5 @@
-"""
-GiPH/PRISM Migration Bug Scanner
+﻿"""
+QEMU Migration Bug Scanner
 ==================================
 Python 2 -> Python 3 migration bug detection using three-stage data flow analysis.
 
@@ -14,7 +14,7 @@ Output: structured JSON report compatible with report.py
 Usage:
   python scanner.py --py3 <path> --py2 <path> --project <name> [--output <file>]
 
-Author: Allan Kiche, GiPH/PRISM Research, Carnegie Mellon University
+Author: Allan Kiche, QEMU Research, Carnegie Mellon University
 """
 
 import ast
@@ -519,7 +519,7 @@ def scan(py3_path: str, py2_path: str, project_name: str) -> ScanResult:
     Returns a ScanResult with all findings.
     """
     print(f"\n{'='*60}")
-    print(f"GiPH/PRISM Scanner — {project_name}")
+    print(f"QEMU Scanner — {project_name}")
     print(f"{'='*60}")
     print(f"py3_codebase: {py3_path}")
     print(f"py2_codebase: {py2_path}")
@@ -626,7 +626,7 @@ def _count_by_key(items, key: str) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="GiPH/PRISM Migration Bug Scanner — Python 2 to Python 3",
+        description="QEMU Migration Bug Scanner — Python 2 to Python 3",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

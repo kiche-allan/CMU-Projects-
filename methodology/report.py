@@ -1,12 +1,12 @@
-"""
-GiPH/PRISM Report Generator
+﻿"""
+QEMU Report Generator
 ==============================
 Reads a scanner.py JSON output file and produces a formatted Word document.
 
 Usage:
   python report.py --input <scan.json> [--output <report.docx>]
 
-Author: Allan Kiche, GiPH/PRISM Research, Carnegie Mellon University
+Author: Allan Kiche, QEMU Research, Carnegie Mellon University
 """
 
 import json
@@ -149,7 +149,7 @@ def add_footer(doc, project_name: str):
     footer = section.footer
     p = footer.paragraphs[0]
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = p.add_run(f"Allan Kiche  |  GiPH/PRISM Research  |  Carnegie Mellon University  |  {project_name}")
+    run = p.add_run(f"Allan Kiche  |  QEMU Research  |  Carnegie Mellon University  |  {project_name}")
     run.font.size = Pt(8)
     run.font.color.rgb = LIGHT_GREY
 
@@ -392,7 +392,7 @@ def generate_report(scan_json_path: str, output_path: str):
     # Title
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = p.add_run(f"GiPH/PRISM Migration Bug Scan — {data['project']}")
+    run = p.add_run(f"QEMU Migration Bug Scan — {data['project']}")
     run.bold = True
     run.font.size = Pt(22)
     run.font.color.rgb = DARK_BLUE
@@ -435,7 +435,7 @@ def generate_report(scan_json_path: str, output_path: str):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="GiPH/PRISM Report Generator — JSON scan results to Word document"
+        description="QEMU Report Generator — JSON scan results to Word document"
     )
     parser.add_argument("--input",  required=True,  help="Input JSON file from scanner.py")
     parser.add_argument("--output", default=None,   help="Output .docx file")

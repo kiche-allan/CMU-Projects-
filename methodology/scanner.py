@@ -458,6 +458,10 @@ def classify_hit(hit: PatternHit, confidence: str, py2_present: bool) -> str:
     CANDIDATE:      Medium confidence OR pattern exists in both codebases
     FALSE_POSITIVE: Low confidence + no same-file origin + pattern in py2 too
     """
+    # from __future__ import annotations is valid py3 (PEP 563) — not a migration bug
+    if hit.pattern_id == 34 and "annotations" in hit.code_snippet:
+        return "FALSE_POSITIVE"
+
     # Group 5 (import renames) — if present in py3 and not in py2: always CONFIRMED
     if hit.pattern_group == 5 and not py2_present:
         return "CONFIRMED"

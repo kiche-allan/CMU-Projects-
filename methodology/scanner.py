@@ -458,9 +458,23 @@ def classify_hit(hit: PatternHit, confidence: str, py2_present: bool) -> str:
     CANDIDATE:      Medium confidence OR pattern exists in both codebases
     FALSE_POSITIVE: Low confidence + no same-file origin + pattern in py2 too
     """
-    # from __future__ import annotations is valid py3 (PEP 563) — not a migration bug
-    if hit.pattern_id == 34 and "annotations" in hit.code_snippet:
-        return "FALSE_POSITIVE"
+    # from __future__ import annotations/print_function/unicode_literals/division/absolute_import
+    # are all no-ops or valid py3 — not migration bugs
+    if hit.pattern_id == 34:
+        fp_futures = ["annotations", "print_function", "unicode_literals", "division", "absolute_import", "generators", "nested_scopes", "with_statement"]
+        if any(f in hit.code_snippet for f in fp_futures):
+            return "FALSE_POSITIVE"
+
+    # Correct py3 stdlib imports are the fix, not the bug
+    # e.g. from io import StringIO, from configparser import ConfigParser
+    if hit.pattern_group == 5:
+        correct_py3 = ["from io import", "from configparser import", "from html.parser import",
+                       "from http.client import", "from http.cookiejar import",
+                       "from urllib.request import", "from urllib.error import",
+                       "from pickle import", "import pickle", "import queue",
+                       "from queue import"]
+        if any(p in hit.code_snippet for p in correct_py3):
+            return "FALSE_POSITIVE"
 
     # Group 5 (import renames) — if present in py3 and not in py2: always CONFIRMED
     if hit.pattern_group == 5 and not py2_present:
